@@ -49,6 +49,9 @@ npm test           # בדיקות הצפנה ומיזוג
 
 ```bash
 git tag v0.1.1
+```
+
+```bash
 git push origin main --tags
 ```
 
