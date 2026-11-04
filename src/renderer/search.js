@@ -139,7 +139,7 @@ function run() {
   const head = q.trim() ? '' : `<div class="spot-sec">${Object.keys(recent).length ? 'אחרונים ושימושיים' : 'כל הפריטים'}</div>`;
   box.innerHTML = head + results.map((e, i) => `
     <div class="sr ${i === sel ? 'sel' : ''}" data-i="${i}">
-      <span class="kind k-${e.f.kind}">${icon(KIND_ICON[e.f.kind] || 'text')}</span>
+      <span class="kind ${e.it.color ? '' : `k-${e.f.kind}`}" ${tileStyle(e.it.color)}>${icon(e.it.icon || KIND_ICON[e.f.kind] || 'text')}</span>
       <div class="txt">
         <div class="title">${esc(e.it.title || preview(e.f))}${e.label ? `<span class="lbl-sep"> › </span><span class="sr-label">${esc(e.label)}</span>` : ''}</div>
         <div class="sub" dir="auto">${esc(preview(e.f))}</div>

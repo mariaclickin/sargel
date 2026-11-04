@@ -9,6 +9,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { Vault, VaultError } = require('./vault');
 const { Config, DEFAULTS } = require('./config');
+const launcher = require('./launcher');
 
 if (process.env.SARGEL_USER_DATA) app.setPath('userData', process.env.SARGEL_USER_DATA);
 
@@ -22,9 +23,11 @@ const MIN_PASSWORD = 8;
 let cfg;
 let sidebar = null;
 let searchWin = null;
+let keysWin = null;
 let tray = null;
 let quitting = false;
 let hotkeyOk = true;
+let launcherHotkeyOk = true;
 let clipTimer = null;
 let saveChain = Promise.resolve();
 
@@ -150,6 +153,59 @@ function createSearch() {
   searchWin.webContents.on('will-navigate', (e) => e.preventDefault());
 }
 
+function createKeys() {
+  keysWin = new BrowserWindow({
+    width: 820,
+    height: 420,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    hasShadow: false,
+    show: false,
+    backgroundColor: '#00000000',
+    title: 'הסרגל — מקלדת קיצורים',
+    webPreferences,
+  });
+  keysWin.setAlwaysOnTop(true, 'pop-up-menu');
+  if (isMac) keysWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  keysWin.loadFile(path.join(RENDERER, 'keys.html'));
+  keysWin.on('blur', () => hideKeys());
+  keysWin.on('close', (e) => { if (!quitting) { e.preventDefault(); hideKeys(); } });
+  keysWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  keysWin.webContents.on('will-navigate', (e) => e.preventDefault());
+}
+
+function showKeys() {
+  if (!keysWin) return;
+  hideSearch();
+  const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  const [w, h] = keysWin.getSize();
+  keysWin.setPosition(Math.round(wa.x + (wa.width - w) / 2), Math.round(wa.y + (wa.height - h) / 2.4));
+  keysWin.webContents.send('keys:open', publicState());
+  keysWin.show();
+  keysWin.focus();
+}
+
+function hideKeys() {
+  if (!keysWin || !keysWin.isVisible()) return;
+  keysWin.hide();
+  if (isMac && !state.expanded) {
+    app.hide();
+    setTimeout(() => sidebar && sidebar.showInactive(), 80);
+  }
+}
+
+function toggleKeys() {
+  if (keysWin && keysWin.isVisible() && keysWin.isFocused()) hideKeys();
+  else showKeys();
+}
+
 function setExpanded(v, opts = {}) {
   if (!sidebar || sidebar.isDestroyed()) return;
   state.insideSince = 0;
@@ -244,6 +300,7 @@ function rebuildTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'פתיחת הסרגל', click: () => setExpanded(true, { explicit: true, focus: true }) },
     { label: `חיפוש מהיר${hk ? `   (${hk})` : ''}`, click: () => showSearch() },
+    { label: `מקלדת קיצורים${cfg.get('launcherHotkey') ? `   (${prettyHotkey(cfg.get('launcherHotkey'))})` : ''}`, click: () => showKeys() },
     { type: 'separator' },
     { label: 'נעילה', click: () => lockAll() },
     {
@@ -268,14 +325,12 @@ function prettyHotkey(acc) {
 // ───────────────────────── config ─────────────────────────
 function registerHotkey() {
   globalShortcut.unregisterAll();
-  const acc = cfg.get('hotkey');
-  hotkeyOk = true;
-  if (!acc) return;
-  try {
-    hotkeyOk = globalShortcut.register(acc, toggleSearch);
-  } catch {
-    hotkeyOk = false;
-  }
+  const reg = (acc, fn) => {
+    if (!acc) return true;
+    try { return globalShortcut.register(acc, fn); } catch { return false; }
+  };
+  hotkeyOk = reg(cfg.get('hotkey'), toggleSearch);
+  launcherHotkeyOk = cfg.get('launcherHotkey') === cfg.get('hotkey') ? false : reg(cfg.get('launcherHotkey'), toggleKeys);
 }
 
 function applyLogin() {
@@ -291,11 +346,12 @@ function applyConfig(patch) {
   if ('handleY' in patch) clean.handleY = clamp(patch.handleY, 0, 1);
   if ('width' in patch) clean.width = Math.round(clamp(patch.width, 300, 600));
   if (typeof patch.hotkey === 'string' && patch.hotkey.length < 80) clean.hotkey = patch.hotkey;
+  if (typeof patch.launcherHotkey === 'string' && patch.launcherHotkey.length < 80) clean.launcherHotkey = patch.launcherHotkey;
   if ('autoLockMinutes' in patch) clean.autoLockMinutes = Math.round(clamp(patch.autoLockMinutes, 0, 1440));
   if ('launchAtLogin' in patch) clean.launchAtLogin = !!patch.launchAtLogin;
   if (['system', 'light', 'dark'].includes(patch.theme)) clean.theme = patch.theme;
   cfg.set(clean);
-  if ('hotkey' in clean) registerHotkey();
+  if ('hotkey' in clean || 'launcherHotkey' in clean) registerHotkey();
   if ('launchAtLogin' in clean) applyLogin();
   if ('theme' in clean) nativeTheme.themeSource = clean.theme;
   if ('side' in clean || 'handleY' in clean || 'width' in clean) reposition();
@@ -324,12 +380,17 @@ function publicState() {
     for (const i of v.data.items) if (!i.deleted) data.items.push({ ...i, vault: name });
   }
   const p = vaults.personal;
+  data.launchers = p && p.unlocked
+    ? p.data.launchers.filter((l) => !l.deleted).sort((a, b) => (a.order || 0) - (b.order || 0))
+    : [];
   return {
     platform: process.platform,
     version: app.getVersion(),
     config: { ...cfg.data },
     hotkeyOk,
     hotkeyLabel: prettyHotkey(cfg.get('hotkey')),
+    launcherHotkeyOk,
+    launcherHotkeyLabel: prettyHotkey(cfg.get('launcherHotkey')),
     vaults: { personal: info('personal'), team: info('team') },
     rememberTeam: !!(p && p.unlocked && p.data.settings.teamPassword),
     data,
@@ -339,7 +400,7 @@ function publicState() {
 
 function broadcast() {
   const s = publicState();
-  for (const w of [sidebar, searchWin]) {
+  for (const w of [sidebar, searchWin, keysWin]) {
     if (w && !w.isDestroyed()) w.webContents.send('state', s);
   }
 }
@@ -422,24 +483,31 @@ function backupDaily(name) {
   } catch { /* backups are best-effort */ }
 }
 
+// tabs every new sargel starts with (and older ones are migrated to, once)
+const STARTER_TABS = [
+  ['כללי', '📌'],
+  ['מיילים', '✉️'],
+  ['מאמרים', '📝'],
+  ['משימות', '✅'],
+  ['לקוחות', '👥'],
+  ['גישות', '🔑'],
+  ['קישורים', '🔗'],
+];
+const MIGRATION = 'v011';
+
 function starterData() {
   const now = Date.now();
-  const tab = (name, icon, order) => ({ id: uid(), name, icon, order, updatedAt: now });
-  const tabs = [
-    tab('נושאים ומיילים', '✉️', 0),
-    tab('לקוחות', '👥', 1),
-    tab('גישות', '🔑', 2),
-    tab('קישורים', '🔗', 3),
-  ];
+  const tabs = STARTER_TABS.map(([name, icon], order) => ({ id: uid(), name, icon, order, updatedAt: now }));
+  const T = Object.fromEntries(tabs.map((t) => [t.name, t]));
   const f = (label, kind, value) => ({ id: uid(), label, kind, value });
   const items = [
     {
-      id: uid(), tabId: tabs[0].id, order: 0, updatedAt: now,
+      id: uid(), tabId: T['מיילים'].id, order: 0, updatedAt: now, color: 'blue', icon: 'mail',
       title: 'דוגמה — לחיצה מעתיקה אותי',
       fields: [f('', 'text', 'שלום, תודה על פנייתך! נחזור אלייך בהקדם.')],
     },
     {
-      id: uid(), tabId: tabs[1].id, order: 0, updatedAt: now,
+      id: uid(), tabId: T['לקוחות'].id, order: 0, updatedAt: now, color: 'purple', icon: 'user',
       title: 'לקוח לדוגמה',
       fields: [
         f('טלפון', 'text', '050-0000000'),
@@ -449,12 +517,46 @@ function starterData() {
       ],
     },
     {
-      id: uid(), tabId: tabs[3].id, order: 0, updatedAt: now,
+      id: uid(), tabId: T['קישורים'].id, order: 0, updatedAt: now, color: 'green', icon: 'link',
       title: 'Google Drive',
       fields: [f('', 'link', 'https://drive.google.com')],
     },
   ];
-  return { schema: 1, tabs, items, settings: { updatedAt: now } };
+  const launchers = launcher.suggestedLaunchers().map((l) => ({ id: uid(), ...l }));
+  return { schema: 1, tabs, items, launchers, settings: { updatedAt: now, migrations: [MIGRATION] } };
+}
+
+/**
+ * One-time upgrade of a sargel made with v0.1.0:
+ * "נושאים ומיילים" → "מיילים", add כללי / מאמרים / משימות in the right order, and add starter buttons.
+ */
+async function migratePersonal() {
+  const v = vaults.personal;
+  if (!v || !v.unlocked) return;
+  const s = v.data.settings || {};
+  if (Array.isArray(s.migrations) && s.migrations.includes(MIGRATION)) return;
+  const now = Date.now();
+  const live = v.data.tabs.filter((t) => !t.deleted).sort((a, b) => (a.order || 0) - (b.order || 0));
+  const old = live.find((t) => t.name === 'נושאים ומיילים');
+  if (old && !live.some((t) => t.name === 'מיילים')) Object.assign(old, { name: 'מיילים', updatedAt: now });
+  const byName = new Map(live.map((t) => [t.name, t]));
+  const ordered = [];
+  for (const [name, icon] of STARTER_TABS.slice(0, 4)) {
+    let t = byName.get(name);
+    if (!t) {
+      t = { id: uid(), name, icon, order: 0, updatedAt: now };
+      v.data.tabs.push(t);
+    }
+    ordered.push(t);
+  }
+  for (const t of live) if (!ordered.includes(t)) ordered.push(t);
+  ordered.forEach((t, i) => { if (t.order !== i) { t.order = i; t.updatedAt = now; } });
+
+  if (!v.data.launchers.some((l) => !l.deleted)) {
+    for (const l of launcher.suggestedLaunchers()) v.data.launchers.push({ id: uid(), ...l });
+  }
+  v.data.settings = { ...s, migrations: [...(s.migrations || []), MIGRATION], updatedAt: now };
+  await queueSave('personal');
 }
 
 function teamStarter() {
@@ -503,7 +605,7 @@ async function attachVault(which, v, password, remember) {
   watch(which);
   backupDaily(which);
   if (which === 'team') await setRememberedTeamPassword(remember ? password : null);
-  else await autoUnlockTeam();
+  else { await migratePersonal(); await autoUnlockTeam(); }
   broadcast();
 }
 
@@ -530,6 +632,7 @@ async function unlockPersonal(password) {
   vaults.personal = v;
   watch('personal');
   backupDaily('personal');
+  await migratePersonal();
   await autoUnlockTeam();
   broadcast();
 }
@@ -575,6 +678,9 @@ function suggestFolders() {
 
 // ───────────────────────── data operations ─────────────────────────
 const KINDS = new Set(['text', 'link', 'secret']);
+const COLORS = new Set(['purple', 'blue', 'green', 'amber', 'coral', 'red', 'pink', 'gray']);
+const LAUNCH_TYPES = new Set(['web', 'app', 'path', 'copy']);
+const KEY_RE = /^[0-9A-Z]$/;
 const str = (v, max) => String(v == null ? '' : v).slice(0, max);
 
 function cleanTab(t) {
@@ -642,6 +748,8 @@ function saveItem({ vault, item, fromVault }) {
     tabId: tab.id,
     title: str(item.title, 200).trim(),
     fields: cleanFields(item.fields),
+    color: COLORS.has(item.color) ? item.color : '',
+    icon: /^[a-z]{1,24}$/.test(item.icon || '') ? item.icon : '',
     updatedAt: now,
   };
   const idx = v.data.items.findIndex((x) => x.id === id);
@@ -677,6 +785,73 @@ function reorder({ entries }) {
   for (const name of touched) queueSave(name);
 }
 
+function saveLauncher({ launcher: l }) {
+  const v = requireVault('personal');
+  if (!l || typeof l !== 'object' || !LAUNCH_TYPES.has(l.type)) throw new VaultError('BAD_INPUT');
+  const now = Date.now();
+  const id = typeof l.id === 'string' && l.id ? l.id.slice(0, 64) : uid();
+  const key = KEY_RE.test(l.key || '') ? l.key : '';
+  const clean = {
+    id,
+    key,
+    title: str(l.title, 40).trim() || 'כפתור',
+    icon: /^[a-z]{1,24}$/.test(l.icon || '') ? l.icon : 'bolt',
+    color: COLORS.has(l.color) ? l.color : 'purple',
+    type: l.type,
+    url: str(l.url, 2000).trim(),
+    profile: str(l.profile, 64),
+    target: str(l.target, 1000),
+    itemId: str(l.itemId, 64),
+    fieldId: str(l.fieldId, 64),
+    updatedAt: now,
+  };
+  const list = v.data.launchers;
+  if (key) {
+    for (const o of list) if (!o.deleted && o.id !== id && o.key === key) { o.key = ''; o.updatedAt = now; }
+  }
+  const idx = list.findIndex((x) => x.id === id);
+  clean.order = idx >= 0 && !list[idx].deleted ? list[idx].order : nextOrder(list.filter((x) => !x.deleted));
+  if (idx >= 0) list[idx] = clean; else list.push(clean);
+  queueSave('personal');
+  return { id };
+}
+
+function deleteLauncher({ id }) {
+  const v = requireVault('personal');
+  const now = Date.now();
+  v.data.launchers = v.data.launchers.map((x) => (x.id === id ? { id, deleted: true, updatedAt: now } : x));
+  queueSave('personal');
+}
+
+function findField(itemId, fieldId) {
+  for (const name of ['personal', 'team']) {
+    const v = vaults[name];
+    if (!v || !v.unlocked) continue;
+    const it = v.data.items.find((i) => i.id === itemId && !i.deleted);
+    if (!it) continue;
+    const f = (it.fields || []).find((x) => x.id === fieldId) || (it.fields || [])[0];
+    if (f) return f;
+  }
+  return null;
+}
+
+async function runLauncher({ id }) {
+  const v = requireVault('personal');
+  const l = v.data.launchers.find((x) => x.id === id && !x.deleted);
+  if (!l) throw new VaultError('NOT_FOUND');
+  try {
+    if (l.type === 'web') { await launcher.openWeb(l.url, l.profile); return { done: 'opened' }; }
+    if (l.type === 'app') { const r = await launcher.openApp(l); return { done: r.fallback ? 'fallback' : 'opened' }; }
+    if (l.type === 'path') { await launcher.openPath(l.target); return { done: 'opened' }; }
+    const f = findField(l.itemId, l.fieldId);
+    if (!f) throw new VaultError('NOT_FOUND');
+    copyText(f.value, f.kind === 'secret');
+    return { done: 'copied', secret: f.kind === 'secret' };
+  } catch (e) {
+    throw new VaultError(e.code || 'LAUNCH_FAILED', e.message);
+  }
+}
+
 function copyText(text, secret) {
   const value = String(text == null ? '' : text);
   clipboard.writeText(value);
@@ -699,7 +874,7 @@ function openExternal(url) {
 // ───────────────────────── IPC ─────────────────────────
 function handle(channel, fn) {
   ipcMain.handle(channel, async (e, arg) => {
-    const ok = [sidebar, searchWin].some((w) => w && !w.isDestroyed() && w.webContents === e.sender);
+    const ok = [sidebar, searchWin, keysWin].some((w) => w && !w.isDestroyed() && w.webContents === e.sender);
     if (!ok) return { ok: false, code: 'FORBIDDEN' };
     try {
       const r = await fn(arg || {}, e);
@@ -800,6 +975,28 @@ function registerIpc() {
   handle('data:deleteItem', (a) => deleteItem(a));
   handle('data:reorder', (a) => reorder(a));
 
+  handle('launch:save', (a) => saveLauncher(a));
+  handle('launch:delete', (a) => deleteLauncher(a));
+  handle('launch:run', (a) => runLauncher(a));
+  handle('launch:chromeProfiles', () => ({ profiles: launcher.chromeProfiles() }));
+  handle('launch:apps', async () => ({ apps: await launcher.listApps() }));
+  handle('launch:pickPath', async ({ kind }, e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    state.hold = true;
+    const r = await dialog.showOpenDialog(win, {
+      properties: [kind === 'folder' ? 'openDirectory' : 'openFile'],
+      title: kind === 'folder' ? 'בחירת תיקייה' : 'בחירת קובץ או תוכנה',
+    });
+    return { path: r.canceled ? null : r.filePaths[0] };
+  });
+  handle('keys:show', () => showKeys());
+  handle('keys:hide', () => hideKeys());
+  handle('keys:openEditor', ({ key }) => {
+    hideKeys();
+    setExpanded(true, { explicit: true, focus: true });
+    sidebar.webContents.send('ui:editLauncher', { key: KEY_RE.test(key || '') ? key : '' });
+  });
+
   handle('clip:copy', ({ text, secret }) => copyText(text, !!secret));
   handle('shell:open', ({ url }) => openExternal(url));
 
@@ -841,6 +1038,7 @@ async function boot() {
   registerIpc();
   createSidebar();
   createSearch();
+  createKeys();
   createTray();
   registerHotkey();
   applyLogin();
@@ -858,8 +1056,8 @@ async function boot() {
   if (process.env.SARGEL_SHOTS) {
     // development only: scripted screenshots of every screen
     require('./devshots')({
-      app, state, vaults, setExpanded, createVault, unlockPersonal, lockAll, showSearch, broadcast,
-      sidebar: () => sidebar, search: () => searchWin,
+      app, state, vaults, setExpanded, createVault, openVault, unlockPersonal, lockAll, showSearch, showKeys, broadcast,
+      sidebar: () => sidebar, search: () => searchWin, keys: () => keysWin,
     });
   }
 }

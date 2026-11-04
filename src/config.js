@@ -9,6 +9,7 @@ const DEFAULTS = {
   handleY: 0.35, // 0..1 — vertical position of the edge handle
   width: 390, // expanded panel width
   hotkey: 'CommandOrControl+Shift+Space',
+  launcherHotkey: 'CommandOrControl+Shift+K',
   autoLockMinutes: 15, // 0 = never
   launchAtLogin: true,
   theme: 'system', // 'system' | 'light' | 'dark'

@@ -73,7 +73,7 @@ function parseFile(text) {
 }
 
 function emptyData() {
-  return { schema: 1, tabs: [], items: [], settings: { updatedAt: 0 } };
+  return { schema: 1, tabs: [], items: [], launchers: [], settings: { updatedAt: 0 } };
 }
 
 function normalize(data) {
@@ -82,6 +82,7 @@ function normalize(data) {
     schema: 1,
     tabs: Array.isArray(data.tabs) ? data.tabs : [],
     items: Array.isArray(data.items) ? data.items : [],
+    launchers: Array.isArray(data.launchers) ? data.launchers : [],
     settings: data.settings && typeof data.settings === 'object' ? data.settings : { updatedAt: 0 },
   };
 }
@@ -104,6 +105,7 @@ function merge(local, remote) {
     schema: 1,
     tabs: mergeList(local.tabs, remote.tabs),
     items: mergeList(local.items, remote.items),
+    launchers: mergeList(local.launchers, remote.launchers),
     settings: (remote.settings.updatedAt || 0) > (local.settings.updatedAt || 0) ? remote.settings : local.settings,
   };
 }
@@ -118,6 +120,7 @@ function hasNewer(local, remote) {
   remote = normalize(remote);
   return check(local.tabs, remote.tabs)
     || check(local.items, remote.items)
+    || check(local.launchers, remote.launchers)
     || (local.settings.updatedAt || 0) > (remote.settings.updatedAt || 0);
 }
 

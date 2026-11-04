@@ -51,7 +51,74 @@ const ICONS = {
   save: '<path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 20h14"/>',
   warn: '<path d="M12 4l9 16H3z"/><path d="M12 10v4"/><path d="M12 17.2v.1"/>',
   logout: '<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h11"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.5 7l8.5 6 8.5-6"/>',
+  send: '<path d="M21 3L10 14"/><path d="M21 3l-7 18-4-7-7-4z"/>',
+  checklist: '<path d="M4 6l1.5 1.5L8 5"/><path d="M4 12l1.5 1.5L8 11"/><path d="M4 18l1.5 1.5L8 17"/><path d="M11 6h9M11 12h9M11 18h9"/>',
+  phone: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/>',
+  chat: '<path d="M4 18V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8z"/><path d="M8 9h8M8 12h5"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/>',
+  star: '<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.8l-5.2 2.8 1-5.8L3.5 9.7l5.9-.9z"/>',
+  flag: '<path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/>',
+  bolt: '<path d="M13 3L5 13h6l-1 8 8-10h-6z"/>',
+  calendar: '<rect x="4" y="5" width="16" height="16" rx="2.5"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  briefcase: '<rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/><path d="M3 13h18"/>',
+  cash: '<rect x="3" y="6" width="18" height="12" rx="2.5"/><circle cx="12" cy="12" r="2.5"/><path d="M6.5 9.5v.01M17.5 14.5v.01"/>',
+  tag: '<path d="M3 12V4h8l9 9-8 8z"/><circle cx="7.5" cy="7.5" r="1.2"/>',
+  home: '<path d="M4 11l8-7 8 7"/><path d="M6 9.5V20h12V9.5"/><path d="M10 20v-5h4v5"/>',
+  heart: '<path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/>',
+  mappin: '<path d="M12 21s-6-5.5-6-11a6 6 0 0 1 12 0c0 5.5-6 11-6 11z"/><circle cx="12" cy="10" r="2.2"/>',
+  idcard: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="9" cy="11" r="2"/><path d="M6 16a3 3 0 0 1 6 0M14 10h4M14 13h3"/>',
+  chrome: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/><path d="M12 8.5h8.2M8.97 13.75L4.9 6.6M15.03 13.75L11 20.9"/>',
+  sparkle: '<path d="M12 3l1.8 5.4L19 10l-5.2 1.6L12 17l-1.8-5.4L5 10l5.2-1.6z"/><path d="M19 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>',
+  apps: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>',
+  keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
+  play: '<path d="M7 4.5v15l12-7.5z"/>',
 };
+
+/* item / launcher colors — one mid-tone per hue works on light and dark panels */
+const COLORS = {
+  purple: ['סגול', '#7F77DD'],
+  blue: ['כחול', '#378ADD'],
+  green: ['ירוק', '#5E9A24'],
+  amber: ['צהוב', '#C98314'],
+  coral: ['כתום', '#D85A30'],
+  red: ['אדום', '#E24B4A'],
+  pink: ['ורוד', '#D4537E'],
+  gray: ['אפור', '#888780'],
+};
+const ITEM_ICONS = ['text', 'mail', 'send', 'file', 'edit', 'checklist', 'phone', 'chat', 'user', 'users', 'idcard', 'key', 'lock', 'link',
+  'globe', 'star', 'flag', 'bolt', 'calendar', 'clock', 'briefcase', 'cash', 'tag', 'home', 'heart', 'mappin', 'folder', 'sparkle'];
+const LAUNCH_ICONS = ['chrome', 'globe', 'mail', 'sparkle', 'chat', 'apps', 'folder', 'file', 'copy', 'user', 'users', 'briefcase',
+  'calendar', 'checklist', 'phone', 'star', 'bolt', 'heart', 'home', 'cash', 'key', 'link', 'send', 'play'];
+
+/** inline style for a colored icon tile */
+function tileStyle(color) {
+  const c = COLORS[color];
+  return c ? `style="background:${c[1]}26;color:${c[1]}"` : '';
+}
+
+const KEY_ROWS = ['1234567890', 'QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM'];
+
+/** physical key → our key name (works the same with a Hebrew or English layout) */
+function keyFromCode(code) {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit\d$/.test(code)) return code.slice(5);
+  if (/^Numpad\d$/.test(code)) return code.slice(6);
+  return null;
+}
+
+/** visual keyboard; launchers are shown on their keys */
+function keyboardHTML(launchers, selected) {
+  const byKey = new Map(launchers.filter((l) => l.key).map((l) => [l.key, l]));
+  return `<div class="kbd">${KEY_ROWS.map((row, ri) => `
+    <div class="kbd-row" style="padding-inline-start:${ri * 22}px">${[...row].map((k) => {
+      const l = byKey.get(k);
+      return `<button class="key ${l ? 'on' : ''} ${k === selected ? 'sel' : ''}" data-key="${k}" ${l ? tileStyle(l.color) : ''} title="${l ? esc(l.title) : 'מקש פנוי — לחיצה מגדירה'}">
+        <span class="kcap">${k}</span>${l ? `${icon(l.icon || 'bolt')}<span class="klabel">${esc(l.title)}</span>` : ''}</button>`;
+    }).join('')}</div>`).join('')}</div>`;
+}
 
 function icon(name, cls = '') {
   return `<svg class="ic ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ''}</svg>`;
@@ -80,7 +147,13 @@ const ERRORS = {
   READ_FAILED: 'לא הצלחתי לקרוא את הקובץ',
   LOCKED: 'הסרגל נעול',
   BAD_INPUT: 'משהו בנתונים לא תקין',
+  BAD_URL: 'הכתובת לא תקינה — צריכה להתחיל ב-https://',
+  NO_CHROME: 'לא מצאתי את כרום במחשב הזה',
+  NOT_INSTALLED: 'התוכנה לא מותקנת במחשב הזה',
+  LAUNCH_FAILED: 'לא הצלחתי לפתוח',
 };
+
+const LAUNCH_DONE = { opened: 'נפתח', fallback: 'התוכנה לא מותקנת — נפתח באתר', copied: 'הועתק' };
 const errText = (r) => ERRORS[r && r.code] || (r && r.message) || 'משהו השתבש';
 
 /* recently copied — shared between the windows through localStorage */

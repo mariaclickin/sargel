@@ -6,6 +6,7 @@ let view = null; // 'onboarding' | 'lock' | 'main'
 let activeTab = null;
 let query = '';
 let modal = null;
+let colorFilter = null;
 const openItems = new Set();
 const revealed = new Set();
 
@@ -27,6 +28,11 @@ api.on('ui:expanded', (v) => {
   }
 });
 api.on('toast', (t) => toast(t.message, t.kind));
+api.on('ui:editLauncher', ({ key }) => {
+  if (view !== 'main') return;
+  const existing = key && S.data.launchers.find((l) => l.key === key);
+  openLauncherEditor(existing || null, key);
+});
 
 handleEl.addEventListener('click', () => api.call('ui:expand', { focus: true }));
 
@@ -287,10 +293,12 @@ function mountMain() {
   panel.innerHTML = `
     <header class="top">
       <div class="brand">${LOGO}<span>הסרגל</span></div>
+      <button class="icon-btn" data-action="keyboard" title="מקלדת קיצורים">${icon('keyboard')}</button>
       <button class="icon-btn" data-action="pin" title="נעיצה — הסרגל יישאר פתוח">${icon('pin')}</button>
       <button class="icon-btn" data-action="lock" title="נעילה">${icon('lock')}</button>
       <button class="icon-btn" data-action="settings" title="הגדרות">${icon('gear')}</button>
     </header>
+    <div id="launch" class="launch"></div>
     <div class="searchbox">${icon('search')}<input id="q" placeholder="חיפוש בכל הסרגל…" autocomplete="off" spellcheck="false"><kbd id="hk"></kbd></div>
     <div id="banner"></div>
     <nav id="tabs" class="tabs"></nav>
@@ -312,6 +320,8 @@ function mountMain() {
     if (t) openTabEditor(tabById(t.dataset.id));
   });
   panel.addEventListener('contextmenu', (e) => {
+    const lb = e.target.closest('.lbtn[data-lid]');
+    if (lb) { e.preventDefault(); openLauncherEditor(S.data.launchers.find((l) => l.id === lb.dataset.lid)); return; }
     const t = e.target.closest('.tab[data-id]');
     if (t) { e.preventDefault(); openTabEditor(tabById(t.dataset.id)); return; }
     const it = e.target.closest('.item');
@@ -329,8 +339,26 @@ function renderMain() {
   const t = S.vaults.team;
   $('#banner').innerHTML = t.configured && !t.unlocked
     ? `<div class="banner">${icon('users')}<span>כספת הצוות נעולה</span><button class="ghost sm" data-action="unlock-team">פתיחה</button></div>` : '';
+  renderLaunch();
   renderTabs();
   renderList();
+}
+
+function renderLaunch() {
+  const ls = S.data.launchers;
+  $('#launch').innerHTML = ls.map((l) => `
+    <button class="lbtn" data-action="launch" data-lid="${l.id}" title="${esc(l.title)}${l.key ? ` · ${esc(S.launcherHotkeyLabel)} ואז ${l.key}` : ''} · קליק ימני לעריכה">
+      <span class="ltile" ${tileStyle(l.color)}>${icon(l.icon || 'bolt')}${l.key ? `<span class="lkey">${l.key}</span>` : ''}</span>
+      <span class="lname">${esc(l.title)}</span>
+    </button>`).join('')
+    + `<button class="lbtn add" data-action="add-launch" title="כפתור חדש"><span class="ltile">${icon('plus')}</span><span class="lname">הוספה</span></button>`;
+}
+
+async function runLaunch(id, el) {
+  const r = await api.call('launch:run', { id });
+  if (!r.ok) { toast(r.code === 'NOT_FOUND' ? 'הקובץ או התיקייה לא נמצאו' : errText(r), 'warn'); return; }
+  flash(el);
+  toast(r.done === 'copied' && r.secret ? 'הסיסמה הועתקה · תימחק מהלוח בעוד 30 שניות' : LAUNCH_DONE[r.done] || 'בוצע');
 }
 
 const tabsSorted = () => S.data.tabs.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
@@ -382,7 +410,7 @@ function itemHTML(it, showTab) {
   <div class="item ${multi ? 'multi' : ''} ${open ? 'open' : ''}" data-id="${it.id}" draggable="${query ? 'false' : 'true'}">
     <div class="row" data-action="${multi ? 'toggle' : 'copy-field'}" ${!multi && f ? `data-fid="${f.id}"` : ''}
       title="${multi ? 'לחיצה פותחת' : 'לחיצה מעתיקה'}">
-      <span class="kind k-${kind}">${icon(multi ? 'stack' : KIND_ICON[kind] || 'text')}</span>
+      <span class="kind ${it.color ? '' : `k-${multi ? 'stack' : kind}`}" ${tileStyle(it.color)}>${icon(it.icon || (multi ? 'stack' : KIND_ICON[kind] || 'text'))}</span>
       <div class="txt">
         <div class="title">${esc(it.title || preview(f) || '(ללא כותרת)')}</div>
         ${tab ? `<div class="from">${esc(tab.icon || '')} ${esc(tab.name)}</div>` : ''}
@@ -443,13 +471,19 @@ function renderList() {
     list.innerHTML = `<div class="empty"><div class="big">🗂️</div>אין עדיין טאבים.<br>לוחצים על <b>+</b> למעלה כדי ליצור את הראשון.</div>`;
     return;
   }
-  const items = itemsOf(tab.id);
+  const all = itemsOf(tab.id);
+  const used = Object.keys(COLORS).filter((c) => all.some((it) => it.color === c));
+  if (colorFilter && !used.includes(colorFilter)) colorFilter = null;
+  const items = colorFilter ? all.filter((it) => it.color === colorFilter) : all;
+  const dots = used.length
+    ? `<span class="cfilter">${used.map((c) => `<button class="cdot ${c === colorFilter ? 'on' : ''}" data-action="cfilter" data-c="${c}" title="רק ${COLORS[c][0]}" style="--c:${COLORS[c][1]}"></button>`).join('')}${colorFilter ? `<button class="cdot-x" data-action="cfilter" data-c="" title="הצגת הכל">${icon('x')}</button>` : ''}</span>` : '';
   list.innerHTML = `
     <div class="list-head">
       <span class="lh-name">${esc(tab.icon || '')} ${esc(tab.name)}</span>
       <span class="count">${items.length}</span>
       ${tab.vault === 'team' ? '<span class="pill">צוות</span>' : ''}
       <span class="grow"></span>
+      ${dots}
       <button class="icon-btn sm" data-action="edit-tab" data-id="${tab.id}" title="עריכת הטאב">${icon('edit')}</button>
     </div>
     ${items.length ? items.map((it) => itemHTML(it, false)).join('')
@@ -466,6 +500,7 @@ async function onPanelClick(e) {
   switch (a.dataset.action) {
     case 'tab':
       activeTab = a.dataset.id;
+      colorFilter = null;
       try { localStorage.setItem('activeTab', activeTab); } catch { /* ignore */ }
       if (query) setQuery(''); else { renderTabs(); renderList(); }
       break;
@@ -497,6 +532,10 @@ async function onPanelClick(e) {
       break;
     case 'edit-item': e.stopPropagation(); openItemEditor(item); break;
     case 'add-item': openItemEditor(null); break;
+    case 'cfilter': colorFilter = a.dataset.c === colorFilter ? null : (a.dataset.c || null); renderList(); break;
+    case 'launch': runLaunch(a.dataset.lid, a.querySelector('.ltile')); break;
+    case 'add-launch': openLauncherEditor(null); break;
+    case 'keyboard': openKeyboard(); break;
     case 'pin': api.call('ui:pin', { pinned: !S.ui.pinned }); break;
     case 'lock': api.call('vault:lock'); break;
     case 'settings': openSettings(); break;
@@ -631,6 +670,10 @@ function openItemEditor(item) {
     <h3>${isNew ? 'פריט חדש' : 'עריכת פריט'}</h3>
     <label class="lbl">כותרת<input class="m-title" placeholder="למשל: מייל פתיחה ללקוח / משה כהן – אינסטלציה"></label>
     <label class="lbl">טאב<select class="m-tab">${tabs.map((t) => `<option value="${t.id}">${esc(`${t.icon ? `${t.icon} ` : ''}${t.name}`)}${t.vault === 'team' ? ' · צוות' : ''}</option>`).join('')}</select></label>
+    <div class="lbl-t">צבע <span class="muted small">— לסיווג ולסינון</span></div>
+    <div class="swatches"></div>
+    <div class="lbl-t">אייקון</div>
+    <div class="icon-grid"></div>
     <div class="lbl-t">תוכן <span class="muted small">— שדה אחד: לחיצה מעתיקה. כמה שדות: נפתח כמו מחסנית.</span></div>
     <div class="m-fields"></div>
     <button class="ghost add-field">${icon('plus')} הוספת שדה</button>
@@ -643,6 +686,7 @@ function openItemEditor(item) {
     </div>`, (m) => {
     $('.m-title', m).value = draft.title || '';
     $('.m-tab', m).value = draft.tabId;
+    bindLook(m, draft, ITEM_ICONS, true);
 
     const box = $('.m-fields', m);
     const draw = () => {
@@ -722,7 +766,7 @@ function openItemEditor(item) {
       const r = await api.call('data:saveItem', {
         vault: target.vault,
         fromVault: item ? item.vault : null,
-        item: { id: draft.id, tabId, title: finalTitle, fields },
+        item: { id: draft.id, tabId, title: finalTitle, fields, color: draft.color || '', icon: draft.icon || '' },
       });
       if (!r.ok) { $('.m-err', m).textContent = errText(r); return; }
       activeTab = tabId;
@@ -735,6 +779,217 @@ function openItemEditor(item) {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('.m-save', m).click();
     });
   }, 'tall');
+}
+
+/* color + icon pickers (shared by the item and button editors) */
+function bindLook(m, draft, icons, allowNone) {
+  const sw = $('.swatches', m);
+  const ig = $('.icon-grid', m);
+  const draw = () => {
+    sw.innerHTML = (allowNone ? `<button class="swatch none ${!draft.color ? 'on' : ''}" data-c="" title="בלי צבע">${icon('x')}</button>` : '')
+      + Object.entries(COLORS).map(([k, [name, hex]]) => `<button class="swatch ${draft.color === k ? 'on' : ''}" data-c="${k}" title="${name}" style="--c:${hex}"></button>`).join('');
+    ig.innerHTML = (allowNone ? `<button class="icon-opt ${!draft.icon ? 'on' : ''}" data-i="" title="לפי סוג התוכן"><span class="small">אוטו׳</span></button>` : '')
+      + icons.map((i) => `<button class="icon-opt ${draft.icon === i ? 'on' : ''}" data-i="${i}" ${draft.icon === i ? tileStyle(draft.color) : ''}>${icon(i)}</button>`).join('');
+  };
+  draw();
+  sw.onclick = (e) => { const b = e.target.closest('[data-c]'); if (b) { draft.color = b.dataset.c; draw(); } };
+  ig.onclick = (e) => { const b = e.target.closest('[data-i]'); if (b) { draft.icon = b.dataset.i; draw(); } };
+}
+
+/* quick-launch button editor */
+const LAUNCH_KINDS = [['web', 'globe', 'אתר / כרום'], ['app', 'apps', 'תוכנה'], ['path', 'folder', 'תיקייה / קובץ'], ['copy', 'copy', 'העתקת פריט']];
+
+async function openLauncherEditor(l, presetKey) {
+  const isNew = !l;
+  const draft = l ? { ...l } : { id: null, key: presetKey || '', title: '', icon: 'globe', color: 'blue', type: 'web', url: '', profile: '', target: '', itemId: '', fieldId: '' };
+  const used = new Map(S.data.launchers.filter((x) => x.key && x.id !== draft.id).map((x) => [x.key, x.title]));
+  const keyOpts = ['', ...KEY_ROWS.join('')].map((k) => `<option value="${k}">${k ? `${k}${used.has(k) ? ` (במקום: ${used.get(k)})` : ''}` : 'בלי מקש'}</option>`).join('');
+
+  showModal(`
+    <h3>${isNew ? 'כפתור חדש' : 'עריכת כפתור'}</h3>
+    <label class="lbl">שם<input class="l-title" maxlength="40" placeholder="למשל: כרום עבודה / Gmail / לקוחות"></label>
+    <div class="lbl-t">מה הכפתור עושה?</div>
+    <div class="seg l-type">${LAUNCH_KINDS.map(([v, ic, label]) => `<button data-v="${v}">${icon(ic)} ${label}</button>`).join('')}</div>
+    <div class="l-body"></div>
+    <label class="lbl">מקש במקלדת הקיצורים <span class="muted small">— ${esc(S.launcherHotkeyLabel || '')} ואז המקש</span><select class="l-key">${keyOpts}</select></label>
+    <div class="lbl-t">צבע</div>
+    <div class="swatches"></div>
+    <div class="lbl-t">אייקון</div>
+    <div class="icon-grid"></div>
+    <div class="err m-err"></div>
+    <div class="m-actions">
+      ${isNew ? '' : '<button class="danger m-del">מחיקה</button>'}
+      <span class="spacer"></span>
+      <button class="ghost m-test">${icon('play')} ניסיון</button>
+      <button class="ghost m-cancel">ביטול</button>
+      <button class="primary m-save">שמירה</button>
+    </div>`, async (m) => {
+    $('.l-title', m).value = draft.title;
+    $('.l-key', m).value = draft.key;
+    bindLook(m, draft, LAUNCH_ICONS, false);
+
+    const pr = await api.call('launch:chromeProfiles');
+    const profiles = pr.profiles || [];
+    let apps = null;
+
+    const body = $('.l-body', m);
+    const drawType = () => {
+      $$('.l-type button', m).forEach((b) => b.classList.toggle('on', b.dataset.v === draft.type));
+      if (draft.type === 'web') {
+        body.innerHTML = `
+          <label class="lbl">פרופיל כרום<select class="l-profile">
+            <option value="">הדפדפן הרגיל של המחשב</option>
+            ${profiles.map((p) => `<option value="${esc(p.dir)}">${esc(p.name)}${p.email ? ` · ${esc(p.email)}` : ''}</option>`).join('')}
+          </select></label>
+          <label class="lbl">כתובת <span class="muted small">— אפשר להשאיר ריק כדי רק לפתוח את הפרופיל</span><input class="l-url" dir="ltr" placeholder="https://mail.google.com"></label>`;
+        $('.l-profile', body).value = draft.profile || '';
+        $('.l-url', body).value = draft.url || '';
+      } else if (draft.type === 'app') {
+        body.innerHTML = `
+          <div class="lbl-t">תוכנה</div>
+          <div class="app-picked muted small"></div>
+          <div class="pw-wrap"><input class="l-appq" placeholder="חיפוש תוכנה מותקנת…"><button class="ghost l-pickexe" title="בחירת קובץ">${icon('folder')}</button></div>
+          <div class="app-list"><div class="muted small">טוען תוכנות…</div></div>
+          <label class="lbl" style="margin-top:10px">אם התוכנה לא מותקנת — לפתוח את האתר <span class="muted small">(רשות)</span><input class="l-url" dir="ltr" placeholder="https://chatgpt.com"></label>`;
+        $('.l-url', body).value = draft.url || '';
+        const picked = () => {
+          const t = draft.target || '';
+          $('.app-picked', body).textContent = t ? `נבחר: ${t.startsWith('name:') ? t.slice(5) : t.startsWith('appid:') ? (apps || []).find((a) => a.target === t)?.name || t.slice(6) : t}` : 'עוד לא נבחרה תוכנה';
+        };
+        const drawApps = () => {
+          if (!apps) return;
+          const q = $('.l-appq', body).value.trim().toLowerCase();
+          const list = apps.filter((a) => !q || a.name.toLowerCase().includes(q)).slice(0, 60);
+          $('.app-list', body).innerHTML = list.map((a) => `<button class="app-opt ${a.target === draft.target ? 'on' : ''}" data-t="${esc(a.target)}" data-n="${esc(a.name)}">${icon('apps')}<span>${esc(a.name)}</span></button>`).join('') || '<div class="muted small">לא נמצאה תוכנה בשם הזה</div>';
+          picked();
+        };
+        picked();
+        api.call('launch:apps').then((r) => { apps = r.apps || []; drawApps(); });
+        $('.l-appq', body).addEventListener('input', drawApps);
+        $('.app-list', body).addEventListener('click', (e) => {
+          const b = e.target.closest('.app-opt');
+          if (!b) return;
+          draft.target = b.dataset.t;
+          if (!$('.l-title', m).value.trim()) $('.l-title', m).value = b.dataset.n;
+          drawApps();
+        });
+        $('.l-pickexe', body).onclick = async () => {
+          const r = await api.call('launch:pickPath', { kind: 'file' });
+          if (r.path) { draft.target = r.path; drawApps(); picked(); }
+        };
+      } else if (draft.type === 'path') {
+        body.innerHTML = `
+          <div class="file-pick ${draft.target ? 'on' : ''}">${icon('folder')}<span class="file-name">${esc(draft.target || 'עוד לא נבחר')}</span></div>
+          <div class="btns" style="margin-bottom:12px"><button class="ghost l-pickdir">${icon('folder')} בחירת תיקייה</button><button class="ghost l-pickfile">${icon('file')} בחירת קובץ</button></div>`;
+        const pick = async (kind) => {
+          const r = await api.call('launch:pickPath', { kind });
+          if (r.path) { draft.target = r.path; drawType(); }
+        };
+        $('.l-pickdir', body).onclick = () => pick('folder');
+        $('.l-pickfile', body).onclick = () => pick('file');
+      } else {
+        const tabsMap = new Map(S.data.tabs.map((t) => [t.id, t]));
+        const opts = [];
+        for (const it of S.data.items) {
+          const t = tabsMap.get(it.tabId);
+          for (const f of fieldsOf(it)) {
+            opts.push({ v: `${it.id}|${f.id}`, label: `${t ? `${t.name} › ` : ''}${it.title}${fieldsOf(it).length > 1 ? ` › ${f.label || KIND_LABEL[f.kind]}` : ''}` });
+          }
+        }
+        body.innerHTML = `<label class="lbl">איזה פריט להעתיק?<select class="l-item">${opts.map((o) => `<option value="${esc(o.v)}">${esc(o.label)}</option>`).join('')}</select></label>`;
+        const sel = $('.l-item', body);
+        if (draft.itemId) sel.value = `${draft.itemId}|${draft.fieldId}`;
+      }
+    };
+    drawType();
+
+    $('.l-type', m).onclick = (e) => {
+      const b = e.target.closest('button');
+      if (!b || b.dataset.v === draft.type) return;
+      draft.type = b.dataset.v;
+      draft.target = '';
+      draft.icon = { web: draft.profile ? 'chrome' : 'globe', app: 'apps', path: 'folder', copy: 'copy' }[draft.type];
+      bindLook(m, draft, LAUNCH_ICONS, false);
+      drawType();
+    };
+
+    const collect = () => {
+      draft.title = $('.l-title', m).value.trim();
+      draft.key = $('.l-key', m).value;
+      if (draft.type === 'web') {
+        draft.profile = $('.l-profile', m).value;
+        draft.url = $('.l-url', m).value.trim();
+        if (!draft.url && !draft.profile) return 'צריך כתובת או פרופיל כרום';
+        if (draft.url && !normalizeUrl(draft.url)) return ERRORS.BAD_URL;
+        if (draft.url) draft.url = normalizeUrl(draft.url);
+        if (!draft.title) draft.title = draft.profile ? (profiles.find((p) => p.dir === draft.profile) || {}).name || 'כרום' : draft.url.replace(/^https?:\/\/(www\.)?/, '').split('/')[0];
+      } else if (draft.type === 'app') {
+        draft.url = $('.l-url', m).value.trim();
+        if (draft.url && !normalizeUrl(draft.url)) return ERRORS.BAD_URL;
+        if (draft.url) draft.url = normalizeUrl(draft.url);
+        if (!draft.target) return 'צריך לבחור תוכנה';
+      } else if (draft.type === 'path') {
+        if (!draft.target) return 'צריך לבחור תיקייה או קובץ';
+        if (!draft.title) draft.title = draft.target.split(/[\\/]/).filter(Boolean).pop();
+      } else {
+        const v = ($('.l-item', m) || {}).value;
+        if (!v) return 'אין עדיין פריטים להעתקה';
+        [draft.itemId, draft.fieldId] = v.split('|');
+        if (!draft.title) draft.title = (S.data.items.find((i) => i.id === draft.itemId) || {}).title || 'העתקה';
+      }
+      if (!draft.title) return 'צריך לתת שם לכפתור';
+      return null;
+    };
+
+    $('.m-cancel', m).onclick = closeModal;
+    $('.m-save', m).onclick = async () => {
+      const err = collect();
+      if (err) { $('.m-err', m).textContent = err; return; }
+      const r = await api.call('launch:save', { launcher: draft });
+      if (!r.ok) { $('.m-err', m).textContent = errText(r); return; }
+      closeModal();
+      toast(isNew ? 'הכפתור נוסף' : 'נשמר');
+    };
+    $('.m-test', m).onclick = async () => {
+      const err = collect();
+      if (err) { $('.m-err', m).textContent = err; return; }
+      const r = await api.call('launch:save', { launcher: draft });
+      if (!r.ok) { $('.m-err', m).textContent = errText(r); return; }
+      draft.id = r.id;
+      const run = await api.call('launch:run', { id: r.id });
+      $('.m-err', m).textContent = run.ok ? '' : (run.code === 'NOT_FOUND' ? 'הקובץ או התיקייה לא נמצאו' : errText(run));
+      if (run.ok) toast(LAUNCH_DONE[run.done] || 'בוצע');
+    };
+    const del = $('.m-del', m);
+    if (del) {
+      del.onclick = async () => {
+        if (!del.dataset.sure) { del.dataset.sure = '1'; del.textContent = 'בטוח? לחיצה נוספת'; return; }
+        const r = await api.call('launch:delete', { id: l.id });
+        if (r.ok) { closeModal(); toast('הכפתור נמחק'); }
+      };
+    }
+  }, 'tall');
+}
+
+/* visual keyboard editor */
+function openKeyboard() {
+  showModal(`
+    <h3>${icon('keyboard')} מקלדת קיצורים</h3>
+    <p class="muted small">מכל מקום במחשב: <kbd>${esc(S.launcherHotkeyLabel || '—')}</kbd> ואז המקש. לחיצה על מקש כאן — הגדרה או עריכה.</p>
+    ${S.launcherHotkeyOk ? '' : `<p class="warn small">${icon('warn')}<span>הקיצור תפוס על ידי תוכנה אחרת — אפשר לשנות בהגדרות.</span></p>`}
+    <div class="kbd-wrap"></div>
+    <div class="m-actions"><button class="ghost m-try">${icon('play')} פתיחת המקלדת עכשיו</button><span class="spacer"></span><button class="primary m-close">סגירה</button></div>`, (m) => {
+    const draw = () => { $('.kbd-wrap', m).innerHTML = keyboardHTML(S.data.launchers); };
+    draw();
+    $('.kbd-wrap', m).onclick = (e) => {
+      const b = e.target.closest('.key');
+      if (!b) return;
+      const l = S.data.launchers.find((x) => x.key === b.dataset.key);
+      openLauncherEditor(l || null, b.dataset.key);
+    };
+    $('.m-try', m).onclick = () => { closeModal(); api.call('keys:show'); };
+    $('.m-close', m).onclick = closeModal;
+  }, 'wide');
 }
 
 /* tab editor */
@@ -896,10 +1151,12 @@ function openSettings() {
     </div>
 
     <div class="sec">
-      <h4>חיפוש מהיר מכל מקום</h4>
-      <div class="set-row"><span>קיצור מקשים</span><input class="hotkey" readonly title="לוחצים כאן ואז על צירוף המקשים הרצוי"></div>
-      ${S.hotkeyOk ? '' : `<p class="warn small">${icon('warn')}<span>הקיצור הזה תפוס על ידי תוכנה אחרת — כדאי לבחור צירוף אחר.</span></p>`}
-      <p class="muted small">לוחצים על השדה ואז על הצירוף החדש (למשל Ctrl+Shift+Space).</p>
+      <h4>קיצורי מקשים מכל מקום</h4>
+      <div class="set-row"><span>חיפוש מהיר</span><input class="hotkey" data-k="hotkey" readonly title="לוחצים כאן ואז על צירוף המקשים הרצוי"></div>
+      ${S.hotkeyOk ? '' : `<p class="warn small">${icon('warn')}<span>קיצור החיפוש תפוס על ידי תוכנה אחרת — כדאי לבחור צירוף אחר.</span></p>`}
+      <div class="set-row"><span>מקלדת קיצורים</span><input class="hotkey" data-k="launcherHotkey" readonly title="לוחצים כאן ואז על צירוף המקשים הרצוי"></div>
+      ${S.launcherHotkeyOk ? '' : `<p class="warn small">${icon('warn')}<span>קיצור המקלדת תפוס — כדאי לבחור צירוף אחר.</span></p>`}
+      <p class="muted small">לוחצים על השדה ואז על הצירוף החדש (למשל Ctrl+Shift+K).</p>
     </div>
 
     <div class="sec">
@@ -964,20 +1221,24 @@ function openSettings() {
     lg.checked = !!c.launchAtLogin;
     lg.onchange = () => set({ launchAtLogin: lg.checked });
 
-    const hk = $('.hotkey', m);
-    hk.value = S.hotkeyLabel || '—';
-    hk.addEventListener('focus', () => { hk.value = 'לחצו על הצירוף…'; });
-    hk.addEventListener('blur', () => { hk.value = S.hotkeyLabel || '—'; });
-    hk.addEventListener('keydown', async (e) => {
-      e.preventDefault();
-      if (e.key === 'Escape') { hk.blur(); return; }
-      const acc = accelFromEvent(e);
-      if (!acc) return;
-      await set({ hotkey: acc });
-      const r = await api.call('state:get');
-      S = r.state;
-      hk.blur();
-      toast(S.hotkeyOk ? `הקיצור עודכן: ${S.hotkeyLabel}` : 'הקיצור תפוס — נסו צירוף אחר', S.hotkeyOk ? 'ok' : 'warn');
+    $$('.hotkey', m).forEach((hk) => {
+      const k = hk.dataset.k;
+      const label = () => (k === 'hotkey' ? S.hotkeyLabel : S.launcherHotkeyLabel) || '—';
+      hk.value = label();
+      hk.addEventListener('focus', () => { hk.value = 'לחצו על הצירוף…'; });
+      hk.addEventListener('blur', () => { hk.value = label(); });
+      hk.addEventListener('keydown', async (e) => {
+        e.preventDefault();
+        if (e.key === 'Escape') { hk.blur(); return; }
+        const acc = accelFromEvent(e);
+        if (!acc) return;
+        await set({ [k]: acc });
+        const r = await api.call('state:get');
+        S = r.state;
+        hk.blur();
+        const ok = k === 'hotkey' ? S.hotkeyOk : S.launcherHotkeyOk;
+        toast(ok ? `הקיצור עודכן: ${label()}` : 'הקיצור תפוס — נסו צירוף אחר', ok ? 'ok' : 'warn');
+      });
     });
 
     m.addEventListener('click', async (e) => {

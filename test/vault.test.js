@@ -70,6 +70,16 @@ test('deletions win over older copies (tombstones)', () => {
   assert.strictEqual(m.items[0].deleted, true);
 });
 
+test('launchers merge between computers like items', () => {
+  const now = Date.now();
+  const local = { ...sample(), launchers: [{ id: 'l1', key: '1', title: 'Chrome A', updatedAt: now }] };
+  const remote = { ...sample(), launchers: [{ id: 'l2', key: '2', title: 'Claude', updatedAt: now }] };
+  const m = merge(local, remote);
+  assert.deepStrictEqual(m.launchers.map((l) => l.id).sort(), ['l1', 'l2']);
+  const old = merge(sample(), {});
+  assert.deepStrictEqual(old.launchers, [], 'vaults from v0.1.0 get an empty launcher list');
+});
+
 test('password change on one computer locks out the stale password on the other', async () => {
   const file = path.join(tmp(), 'v.sargel');
   await Vault.create(file, 'old-password', sample());
