@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.shots/
+.devdata/
+*.log
+
+# never commit vault files — they live in Drive, not in git
+*.sargel
+*.sargel.tmp

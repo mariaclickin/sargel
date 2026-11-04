@@ -1,0 +1,82 @@
+{
+  "name": "sargel",
+  "productName": "Sargel",
+  "version": "0.1.0",
+  "description": "הסרגל — סרגל צד לשליפה מהירה של טקסטים, קישורים, פרטי לקוחות וגישות",
+  "main": "src/main.js",
+  "author": "Click-In 360",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/",
+    "shots": "node scripts/shots.js",
+    "dist": "electron-builder --publish never",
+    "dist:win": "electron-builder --win --publish never",
+    "dist:mac": "electron-builder --mac --publish never"
+  },
+  "build": {
+    "appId": "il.co.clickin360.sargel",
+    "productName": "Sargel",
+    "copyright": "Click-In 360",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "!src/devshots.js",
+      "assets/**/*",
+      "package.json"
+    ],
+    "afterPack": "build/afterPack.js",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "shortcutName": "Sargel",
+      "artifactName": "Sargel-Setup-${version}.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png",
+      "identity": null,
+      "extendInfo": {
+        "LSUIElement": true
+      }
+    },
+    "dmg": {
+      "artifactName": "Sargel-${version}-mac.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github"
+      }
+    ]
+  },
+  "devDependencies": {
+    "electron": "^45.2.2",
+    "electron-builder": "^26.18.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
+  }
+}
