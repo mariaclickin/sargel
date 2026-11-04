@@ -72,19 +72,21 @@ function parseFile(text) {
   return f;
 }
 
+/** record lists that sync between computers (per-record, newest wins) */
+const LISTS = ['tabs', 'items', 'launchers', 'notes', 'days'];
+
 function emptyData() {
-  return { schema: 1, tabs: [], items: [], launchers: [], settings: { updatedAt: 0 } };
+  const d = { schema: 1, settings: { updatedAt: 0 } };
+  for (const k of LISTS) d[k] = [];
+  return d;
 }
 
 function normalize(data) {
   data = data || {};
-  return {
-    schema: 1,
-    tabs: Array.isArray(data.tabs) ? data.tabs : [],
-    items: Array.isArray(data.items) ? data.items : [],
-    launchers: Array.isArray(data.launchers) ? data.launchers : [],
-    settings: data.settings && typeof data.settings === 'object' ? data.settings : { updatedAt: 0 },
-  };
+  const out = { schema: 1 };
+  for (const k of LISTS) out[k] = Array.isArray(data[k]) ? data[k] : [];
+  out.settings = data.settings && typeof data.settings === 'object' ? data.settings : { updatedAt: 0 };
+  return out;
 }
 
 function mergeList(a, b) {
@@ -101,13 +103,10 @@ function mergeList(a, b) {
 function merge(local, remote) {
   local = normalize(local);
   remote = normalize(remote);
-  return {
-    schema: 1,
-    tabs: mergeList(local.tabs, remote.tabs),
-    items: mergeList(local.items, remote.items),
-    launchers: mergeList(local.launchers, remote.launchers),
-    settings: (remote.settings.updatedAt || 0) > (local.settings.updatedAt || 0) ? remote.settings : local.settings,
-  };
+  const out = { schema: 1 };
+  for (const k of LISTS) out[k] = mergeList(local[k], remote[k]);
+  out.settings = (remote.settings.updatedAt || 0) > (local.settings.updatedAt || 0) ? remote.settings : local.settings;
+  return out;
 }
 
 /** true when `local` holds something newer than (or missing from) `remote` */
@@ -118,9 +117,7 @@ function hasNewer(local, remote) {
   };
   local = normalize(local);
   remote = normalize(remote);
-  return check(local.tabs, remote.tabs)
-    || check(local.items, remote.items)
-    || check(local.launchers, remote.launchers)
+  return LISTS.some((k) => check(local[k], remote[k]))
     || (local.settings.updatedAt || 0) > (remote.settings.updatedAt || 0);
 }
 

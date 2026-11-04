@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const { Vault, VaultError } = require('./vault');
 const { Config, DEFAULTS } = require('./config');
 const launcher = require('./launcher');
+const { Activity, combine, stats, dateKey } = require('./activity');
 
 if (process.env.SARGEL_USER_DATA) app.setPath('userData', process.env.SARGEL_USER_DATA);
 
@@ -24,10 +25,16 @@ let cfg;
 let sidebar = null;
 let searchWin = null;
 let keysWin = null;
+let quickWin = null;
+let toastWin = null;
+let toastTimer = null;
 let tray = null;
 let quitting = false;
 let hotkeyOk = true;
 let launcherHotkeyOk = true;
+let quickHotkeyOk = true;
+let activity = null;
+let screenLocked = false;
 let clipTimer = null;
 let saveChain = Promise.resolve();
 
@@ -51,7 +58,10 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(boot);
 }
 
-app.on('before-quit', () => { quitting = true; });
+app.on('before-quit', () => {
+  quitting = true;
+  try { syncActivityToVault(); if (activity) activity.save(); } catch { /* ignore */ }
+});
 app.on('will-quit', () => globalShortcut.unregisterAll());
 app.on('window-all-closed', () => { /* tray app — keep running */ });
 
@@ -206,6 +216,70 @@ function toggleKeys() {
   else showKeys();
 }
 
+/* quick note window (Ctrl+Shift+Y) */
+function createQuick() {
+  quickWin = new BrowserWindow({
+    width: 440, height: 300, frame: false, transparent: true, resizable: false, movable: false,
+    minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true, alwaysOnTop: true,
+    hasShadow: false, show: false, backgroundColor: '#00000000', title: 'הסרגל — פתק מהיר', webPreferences,
+  });
+  quickWin.setAlwaysOnTop(true, 'pop-up-menu');
+  if (isMac) quickWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  quickWin.loadFile(path.join(RENDERER, 'quicknote.html'));
+  quickWin.on('blur', () => hideQuick());
+  quickWin.on('close', (e) => { if (!quitting) { e.preventDefault(); hideQuick(); } });
+  quickWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  quickWin.webContents.on('will-navigate', (e) => e.preventDefault());
+}
+
+function showQuick() {
+  if (!quickWin) return;
+  hideSearch();
+  hideKeys();
+  const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  const [w] = quickWin.getSize();
+  quickWin.setPosition(Math.round(wa.x + (wa.width - w) / 2), Math.round(wa.y + wa.height * 0.2));
+  quickWin.webContents.send('quick:open', publicState());
+  quickWin.show();
+  quickWin.focus();
+}
+
+function hideQuick() {
+  if (!quickWin || !quickWin.isVisible()) return;
+  quickWin.hide();
+  if (isMac && !state.expanded) {
+    app.hide();
+    setTimeout(() => sidebar && sidebar.showInactive(), 80);
+  }
+}
+
+/* small popup in the corner — hourly progress, water, end of day */
+function createToast() {
+  toastWin = new BrowserWindow({
+    width: 360, height: 170, frame: false, transparent: true, resizable: false, movable: false,
+    minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true, alwaysOnTop: true,
+    focusable: !isMac, hasShadow: false, show: false, backgroundColor: '#00000000', title: 'הסרגל', webPreferences,
+  });
+  toastWin.setAlwaysOnTop(true, 'screen-saver');
+  if (isMac) toastWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  toastWin.loadFile(path.join(RENDERER, 'toast.html'));
+  toastWin.on('close', (e) => { if (!quitting) { e.preventDefault(); toastWin.hide(); } });
+  toastWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  toastWin.webContents.on('will-navigate', (e) => e.preventDefault());
+}
+
+function showToast(payload) {
+  if (!toastWin) return;
+  const wa = screen.getPrimaryDisplay().workArea;
+  const [w, h] = toastWin.getSize();
+  const x = cfg.get('side') === 'left' ? wa.x + wa.width - w - 12 : wa.x + 12;
+  toastWin.setPosition(Math.round(x), Math.round(wa.y + wa.height - h - 12));
+  toastWin.webContents.send('toast:show', payload);
+  toastWin.showInactive();
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastWin && toastWin.hide(), 30000);
+}
+
 function setExpanded(v, opts = {}) {
   if (!sidebar || sidebar.isDestroyed()) return;
   state.insideSince = 0;
@@ -301,7 +375,14 @@ function rebuildTrayMenu() {
     { label: 'פתיחת הסרגל', click: () => setExpanded(true, { explicit: true, focus: true }) },
     { label: `חיפוש מהיר${hk ? `   (${hk})` : ''}`, click: () => showSearch() },
     { label: `מקלדת קיצורים${cfg.get('launcherHotkey') ? `   (${prettyHotkey(cfg.get('launcherHotkey'))})` : ''}`, click: () => showKeys() },
+    { label: `פתק מהיר${cfg.get('quickNoteHotkey') ? `   (${prettyHotkey(cfg.get('quickNoteHotkey'))})` : ''}`, click: () => showQuick() },
     { type: 'separator' },
+    {
+      label: 'מעקב שעות',
+      type: 'checkbox',
+      checked: !!cfg.get('trackEnabled'),
+      click: (mi) => applyConfig({ trackEnabled: mi.checked }),
+    },
     { label: 'נעילה', click: () => lockAll() },
     {
       label: 'הפעלה אוטומטית עם המחשב',
@@ -331,6 +412,9 @@ function registerHotkey() {
   };
   hotkeyOk = reg(cfg.get('hotkey'), toggleSearch);
   launcherHotkeyOk = cfg.get('launcherHotkey') === cfg.get('hotkey') ? false : reg(cfg.get('launcherHotkey'), toggleKeys);
+  const q = cfg.get('quickNoteHotkey');
+  quickHotkeyOk = q === cfg.get('hotkey') || q === cfg.get('launcherHotkey') ? false
+    : reg(q, () => (quickWin && quickWin.isVisible() ? hideQuick() : showQuick()));
 }
 
 function applyLogin() {
@@ -347,11 +431,20 @@ function applyConfig(patch) {
   if ('width' in patch) clean.width = Math.round(clamp(patch.width, 300, 600));
   if (typeof patch.hotkey === 'string' && patch.hotkey.length < 80) clean.hotkey = patch.hotkey;
   if (typeof patch.launcherHotkey === 'string' && patch.launcherHotkey.length < 80) clean.launcherHotkey = patch.launcherHotkey;
+  if (typeof patch.quickNoteHotkey === 'string' && patch.quickNoteHotkey.length < 80) clean.quickNoteHotkey = patch.quickNoteHotkey;
+  const hm = /^([01]\d|2[0-3]):[0-5]\d$/;
+  if (hm.test(patch.workStart || '')) clean.workStart = patch.workStart;
+  if (hm.test(patch.workEnd || '')) clean.workEnd = patch.workEnd;
+  if (Array.isArray(patch.workDays)) clean.workDays = [...new Set(patch.workDays.map(Number).filter((d) => d >= 0 && d <= 6))].sort();
+  for (const k of ['trackEnabled', 'hourlyNotify', 'waterReminder']) if (k in patch) clean[k] = !!patch[k];
+  if ('breakMinutes' in patch) clean.breakMinutes = Math.round(clamp(patch.breakMinutes, 3, 60));
+  if ('waterMinutes' in patch) clean.waterMinutes = Math.round(clamp(patch.waterMinutes, 15, 240));
+  if ('waterGoal' in patch) clean.waterGoal = Math.round(clamp(patch.waterGoal, 1, 20));
   if ('autoLockMinutes' in patch) clean.autoLockMinutes = Math.round(clamp(patch.autoLockMinutes, 0, 1440));
   if ('launchAtLogin' in patch) clean.launchAtLogin = !!patch.launchAtLogin;
   if (['system', 'light', 'dark'].includes(patch.theme)) clean.theme = patch.theme;
   cfg.set(clean);
-  if ('hotkey' in clean || 'launcherHotkey' in clean) registerHotkey();
+  if ('hotkey' in clean || 'launcherHotkey' in clean || 'quickNoteHotkey' in clean) registerHotkey();
   if ('launchAtLogin' in clean) applyLogin();
   if ('theme' in clean) nativeTheme.themeSource = clean.theme;
   if ('side' in clean || 'handleY' in clean || 'width' in clean) reposition();
@@ -383,6 +476,7 @@ function publicState() {
   data.launchers = p && p.unlocked
     ? p.data.launchers.filter((l) => !l.deleted).sort((a, b) => (a.order || 0) - (b.order || 0))
     : [];
+  data.notes = p && p.unlocked ? p.data.notes.filter((n) => !n.deleted) : [];
   return {
     platform: process.platform,
     version: app.getVersion(),
@@ -391,6 +485,8 @@ function publicState() {
     hotkeyLabel: prettyHotkey(cfg.get('hotkey')),
     launcherHotkeyOk,
     launcherHotkeyLabel: prettyHotkey(cfg.get('launcherHotkey')),
+    quickHotkeyOk,
+    quickHotkeyLabel: prettyHotkey(cfg.get('quickNoteHotkey')),
     vaults: { personal: info('personal'), team: info('team') },
     rememberTeam: !!(p && p.unlocked && p.data.settings.teamPassword),
     data,
@@ -400,7 +496,7 @@ function publicState() {
 
 function broadcast() {
   const s = publicState();
-  for (const w of [sidebar, searchWin, keysWin]) {
+  for (const w of [sidebar, searchWin, keysWin, quickWin]) {
     if (w && !w.isDestroyed()) w.webContents.send('state', s);
   }
 }
@@ -605,7 +701,7 @@ async function attachVault(which, v, password, remember) {
   watch(which);
   backupDaily(which);
   if (which === 'team') await setRememberedTeamPassword(remember ? password : null);
-  else { await migratePersonal(); await autoUnlockTeam(); }
+  else { await migratePersonal(); await autoUnlockTeam(); syncActivityToVault(); }
   broadcast();
 }
 
@@ -634,6 +730,7 @@ async function unlockPersonal(password) {
   backupDaily('personal');
   await migratePersonal();
   await autoUnlockTeam();
+  syncActivityToVault();
   broadcast();
 }
 
@@ -754,11 +851,179 @@ function saveItem({ vault, item, fromVault }) {
   };
   const idx = v.data.items.findIndex((x) => x.id === id);
   const prev = idx >= 0 ? v.data.items[idx] : null;
+  const wasDone = !!(prev && !prev.deleted && prev.done);
+  clean.done = 'done' in item ? !!item.done : wasDone;
+  clean.doneAt = clean.done ? (wasDone ? prev.doneAt : now) : 0;
   const sameTab = prev && !prev.deleted && prev.tabId === tab.id;
   clean.order = sameTab ? prev.order : nextOrder(v.data.items.filter((x) => !x.deleted && x.tabId === tab.id));
   if (idx >= 0) v.data.items[idx] = clean; else v.data.items.push(clean);
   queueSave(vault);
   return { id };
+}
+
+function toggleDone({ vault, id }) {
+  const v = requireVault(vault);
+  const it = v.data.items.find((x) => x.id === id && !x.deleted);
+  if (!it) throw new VaultError('NOT_FOUND');
+  const now = Date.now();
+  it.done = !it.done;
+  it.doneAt = it.done ? now : 0;
+  it.updatedAt = now;
+  queueSave(vault);
+  return { done: it.done };
+}
+
+/* notes (Keep-style cards) — personal vault */
+function saveNote({ note: n }) {
+  const v = requireVault('personal');
+  if (!n || typeof n !== 'object') throw new VaultError('BAD_INPUT');
+  const now = Date.now();
+  const id = typeof n.id === 'string' && n.id ? n.id.slice(0, 64) : uid();
+  const checks = Array.isArray(n.checks) ? n.checks.slice(0, 100).map((c) => ({
+    id: typeof c.id === 'string' && c.id ? c.id.slice(0, 64) : uid(),
+    text: str(c.text, 500),
+    done: !!c.done,
+  })) : [];
+  const clean = {
+    id,
+    title: str(n.title, 200).trim(),
+    text: str(n.text, 20000),
+    checklist: !!n.checklist,
+    checks,
+    color: COLORS.has(n.color) ? n.color : '',
+    pinned: !!n.pinned,
+    updatedAt: now,
+  };
+  const idx = v.data.notes.findIndex((x) => x.id === id);
+  clean.createdAt = idx >= 0 && v.data.notes[idx].createdAt ? v.data.notes[idx].createdAt : now;
+  if (idx >= 0) v.data.notes[idx] = clean; else v.data.notes.push(clean);
+  queueSave('personal');
+  return { id };
+}
+
+function deleteNote({ id }) {
+  const v = requireVault('personal');
+  const now = Date.now();
+  v.data.notes = v.data.notes.map((x) => (x.id === id ? { id, deleted: true, updatedAt: now } : x));
+  queueSave('personal');
+}
+
+/* ───────── activity tracking + reminders ───────── */
+const hm = (s) => { const [h, m] = String(s).split(':').map(Number); return h * 60 + m; };
+const fmtH = (min) => `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')}`;
+
+function activityTick() {
+  if (!activity) return;
+  activity.sample({
+    enabled: !!cfg.get('trackEnabled'),
+    idleSec: powerMonitor.getSystemIdleTime(),
+    locked: screenLocked,
+    breakMin: cfg.get('breakMinutes'),
+  });
+}
+
+function syncActivityToVault() {
+  const v = vaults.personal;
+  if (!activity || !v || !v.unlocked) return;
+  const list = v.data.days;
+  let changed = false;
+  for (const r of activity.records(14)) {
+    const i = list.findIndex((x) => x.id === r.id);
+    if (i >= 0 && (list[i].updatedAt || 0) >= r.updatedAt) continue;
+    if (i >= 0) list[i] = r; else list.push(r);
+    changed = true;
+  }
+  const cut = dateKey(new Date(Date.now() - 120 * 864e5));
+  const before = list.length;
+  v.data.days = list.filter((d) => d.deleted || !d.date || d.date >= cut);
+  if (changed || v.data.days.length !== before) queueSave('personal');
+}
+
+/** the day as seen from all computers: local + other machines' copies in the vault */
+function dayView(key) {
+  const lines = [activity.day(key).line];
+  let water = activity.day(key).water || 0;
+  const v = vaults.personal;
+  if (v && v.unlocked) {
+    for (const d of v.data.days) {
+      if (d.deleted || d.date !== key || d.machine === activity.machine) continue;
+      lines.push(d.line);
+      water += d.water || 0;
+    }
+  }
+  return { line: combine(lines), water };
+}
+
+function activitySummary() {
+  const breakMin = cfg.get('breakMinutes');
+  const now = new Date();
+  const todayKey = dateKey(now);
+  const today = dayView(todayKey);
+  const week = [];
+  const start = new Date(now);
+  start.setDate(now.getDate() - now.getDay()); // Sunday
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    const k = dateKey(d);
+    const dv = k <= todayKey ? dayView(k) : { line: '', water: 0 };
+    week.push({ date: k, dow: i, future: k > todayKey, active: dv.line ? stats(dv.line, breakMin).active : 0, water: dv.water });
+  }
+  const done = week.filter((d) => !d.future && d.active > 0 && d.date !== todayKey);
+  return {
+    enabled: !!cfg.get('trackEnabled'),
+    breakMin,
+    today: { date: todayKey, line: today.line, water: today.water, stats: stats(today.line, breakMin) },
+    week,
+    weekAvg: done.length ? Math.round(done.reduce((s, d) => s + d.active, 0) / done.length) : null,
+  };
+}
+
+function remindersTick() {
+  if (!activity || !cfg) return;
+  const now = new Date();
+  if (!(cfg.get('workDays') || []).includes(now.getDay())) return;
+  const key = dateKey(now);
+  const m = now.getHours() * 60 + now.getMinutes();
+  const ws = hm(cfg.get('workStart'));
+  const we = hm(cfg.get('workEnd'));
+  const total = Math.max(1, Math.round((we - ws) / 60));
+  const hourly = !!cfg.get('hourlyNotify');
+  const water = !!cfg.get('waterReminder');
+  const wm = cfg.get('waterMinutes');
+  const waterWithHour = hourly && water && wm === 60;
+
+  const events = [];
+  if (hourly) for (let t = ws + 60; t <= we; t += 60) events.push({ id: `h${t}`, t, kind: t >= we ? 'end' : 'hour' });
+  if (water && !waterWithHour) for (let t = ws + wm; t < we; t += wm) events.push({ id: `w${t}`, t, kind: 'water' });
+  // due = time passed (shown up to 45 min late, e.g. after a break) and not shown yet
+  const due = events.filter((e) => m >= e.t && m < e.t + 45 && !activity.wasNotified(key, e.id)).sort((a, b) => a.t - b.t);
+  if (!due.length) return;
+  // wait while the person is away — the reminder shows when they're back
+  if (screenLocked || powerMonitor.getSystemIdleTime() >= cfg.get('breakMinutes') * 60) return;
+  for (const e of due) activity.setNotified(key, e.id);
+  const e = due[due.length - 1];
+  const dv = dayView(key);
+  const goal = cfg.get('waterGoal');
+  let payload;
+  if (e.kind === 'end') {
+    const st = stats(dv.line, cfg.get('breakMinutes'));
+    payload = {
+      kind: 'end', title: 'סיימת את יום העבודה 🎉',
+      body: `${cfg.get('trackEnabled') ? `${fmtH(st.active)} שעות פעילות · ` : ''}${dv.water} כוסות מים`,
+      water: false,
+    };
+  } else if (e.kind === 'hour') {
+    const h = Math.round((e.t - ws) / 60);
+    payload = {
+      kind: 'hour', title: `שעה ${h} מתוך ${total} הושלמה`,
+      body: `${Math.round((h / total) * 100)}% מהיום · נשארו ${total - h} שעות`,
+      water: waterWithHour, waterText: `💧 זמן לכוס מים · ${dv.water}/${goal} היום`,
+    };
+  } else {
+    payload = { kind: 'water', title: 'זמן לכוס מים 💧', body: `${dv.water}/${goal} כוסות היום`, water: true };
+  }
+  showToast(payload);
 }
 
 function deleteItem({ vault, id }) {
@@ -874,7 +1139,7 @@ function openExternal(url) {
 // ───────────────────────── IPC ─────────────────────────
 function handle(channel, fn) {
   ipcMain.handle(channel, async (e, arg) => {
-    const ok = [sidebar, searchWin, keysWin].some((w) => w && !w.isDestroyed() && w.webContents === e.sender);
+    const ok = [sidebar, searchWin, keysWin, quickWin, toastWin].some((w) => w && !w.isDestroyed() && w.webContents === e.sender);
     if (!ok) return { ok: false, code: 'FORBIDDEN' };
     try {
       const r = await fn(arg || {}, e);
@@ -973,6 +1238,41 @@ function registerIpc() {
   handle('data:deleteTab', (a) => deleteTab(a));
   handle('data:saveItem', (a) => saveItem(a));
   handle('data:deleteItem', (a) => deleteItem(a));
+  handle('data:toggleDone', (a) => toggleDone(a));
+  handle('notes:save', (a) => saveNote(a));
+  handle('notes:delete', (a) => deleteNote(a));
+  handle('quick:hide', () => hideQuick());
+  handle('quick:show', () => showQuick());
+
+  handle('activity:get', () => ({ summary: activitySummary() }));
+  handle('activity:water', ({ delta }) => {
+    const n = activity.addWater(dateKey(), delta > 0 ? 1 : -1);
+    activity.save();
+    syncActivityToVault();
+    return { water: n };
+  });
+  handle('activity:clear', () => {
+    activity.clear();
+    activity.save();
+    const v = vaults.personal;
+    if (v && v.unlocked) {
+      const now = Date.now();
+      v.data.days = v.data.days.map((d) => ({ id: d.id, deleted: true, updatedAt: now }));
+      queueSave('personal');
+    }
+  });
+  handle('toast:water', () => {
+    activity.addWater(dateKey(), 1);
+    activity.save();
+    syncActivityToVault();
+    if (toastWin) toastWin.hide();
+    broadcast();
+  });
+  handle('toast:close', () => { if (toastWin) toastWin.hide(); });
+  handle('toast:test', ({ kind }) => {
+    if (kind === 'water') showToast({ kind: 'water', title: 'זמן לכוס מים 💧', body: 'כך תיראה התזכורת', water: true });
+    else showToast({ kind: 'hour', title: 'שעה 3 מתוך 8 הושלמה', body: '37% מהיום · נשארו 5 שעות', water: !!cfg.get('waterReminder'), waterText: '💧 זמן לכוס מים' });
+  });
   handle('data:reorder', (a) => reorder(a));
 
   handle('launch:save', (a) => saveLauncher(a));
@@ -1039,14 +1339,22 @@ async function boot() {
   createSidebar();
   createSearch();
   createKeys();
+  createQuick();
+  createToast();
   createTray();
   registerHotkey();
   applyLogin();
 
+  activity = new Activity(path.join(app.getPath('userData'), 'activity.json'));
   setInterval(tick, 80);
   setInterval(autoLockCheck, 15000);
-  powerMonitor.on('lock-screen', lockAll);
-  powerMonitor.on('suspend', lockAll);
+  setInterval(() => { activityTick(); remindersTick(); }, 30000);
+  setInterval(() => activity.save(), 5 * 60 * 1000);
+  setInterval(syncActivityToVault, 10 * 60 * 1000);
+  activityTick();
+  powerMonitor.on('lock-screen', () => { screenLocked = true; activityTick(); lockAll(); });
+  powerMonitor.on('unlock-screen', () => { screenLocked = false; });
+  powerMonitor.on('suspend', () => { activityTick(); activity.save(); lockAll(); });
   screen.on('display-metrics-changed', reposition);
   screen.on('display-added', reposition);
   screen.on('display-removed', reposition);
@@ -1058,6 +1366,7 @@ async function boot() {
     require('./devshots')({
       app, state, vaults, setExpanded, createVault, openVault, unlockPersonal, lockAll, showSearch, showKeys, broadcast,
       sidebar: () => sidebar, search: () => searchWin, keys: () => keysWin,
+      quick: () => quickWin, toastWin: () => toastWin, showQuick, showToast, activity: () => activity,
     });
   }
 }

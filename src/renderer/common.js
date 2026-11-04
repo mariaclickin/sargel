@@ -75,7 +75,30 @@ const ICONS = {
   apps: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>',
   keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>',
   play: '<path d="M7 4.5v15l12-7.5z"/>',
+  note: '<path d="M5 4h10l4 4v12H5z"/><path d="M15 4v4h4"/><path d="M8 12h8M8 16h5"/>',
+  droplet: '<path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  bell: '<path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+  checkbox: '<rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M8 12.5l2.8 2.8L16.5 9"/>',
+  square: '<rect x="4" y="4" width="16" height="16" rx="3.5"/>',
+  minus: '<path d="M5 12h14"/>',
 };
+
+const DOW = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
+const hmToMin = (s) => { const [h, m] = String(s || '0:0').split(':').map(Number); return h * 60 + m; };
+const fmtMin = (min) => `${Math.floor(min / 60)}:${String(Math.round(min) % 60).padStart(2, '0')}`;
+const clock = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+
+function whenText(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const now = new Date();
+  const t = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (d.toDateString() === now.toDateString()) return `היום ${t}`;
+  const y = new Date(now); y.setDate(now.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return `אתמול ${t}`;
+  return `${d.getDate()}.${d.getMonth() + 1} ${t}`;
+}
 
 /* item / launcher colors — one mid-tone per hue works on light and dark panels */
 const COLORS = {

@@ -299,11 +299,31 @@ function mountMain() {
       <button class="icon-btn" data-action="settings" title="הגדרות">${icon('gear')}</button>
     </header>
     <div id="launch" class="launch"></div>
-    <div class="searchbox">${icon('search')}<input id="q" placeholder="חיפוש בכל הסרגל…" autocomplete="off" spellcheck="false"><kbd id="hk"></kbd></div>
-    <div id="banner"></div>
-    <nav id="tabs" class="tabs"></nav>
-    <main id="list" class="list"></main>
-    <footer class="foot"><button class="primary" data-action="add-item">${icon('plus')} פריט חדש</button></footer>`;
+    <div id="workday" class="workday" data-action="mode" data-mode="day" title="פתיחת 'היום שלי'"></div>
+    <div class="seg modes">
+      <button data-action="mode" data-mode="items">${icon('stack')} פריטים</button>
+      <button data-action="mode" data-mode="notes">${icon('note')} פתקים</button>
+      <button data-action="mode" data-mode="day">${icon('clock')} היום שלי</button>
+    </div>
+    <div class="view" id="v-items">
+      <div class="searchbox">${icon('search')}<input id="q" placeholder="חיפוש בכל הסרגל…" autocomplete="off" spellcheck="false"><kbd id="hk"></kbd></div>
+      <div id="banner"></div>
+      <nav id="tabs" class="tabs"></nav>
+      <main id="list" class="list"></main>
+    </div>
+    <div class="view hidden" id="v-notes">
+      <div class="note-add"><input id="nq" placeholder="פתק חדש… (Enter לשמירה)" autocomplete="off" dir="auto"><button class="icon-btn" data-action="add-note" title="פתק מפורט">${icon('plus')}</button></div>
+      <main id="notes" class="list notes"></main>
+    </div>
+    <div class="view hidden" id="v-day"><main id="day" class="list"></main></div>
+    <footer class="foot" id="foot"><button class="primary" data-action="add-item">${icon('plus')} פריט חדש</button></footer>`;
+
+  const nq = $('#nq');
+  nq.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter' || !nq.value.trim()) return;
+    const r = await api.call('notes:save', { note: { text: nq.value.trim() } });
+    if (r.ok) { nq.value = ''; toast('הפתק נשמר'); } else toast(errText(r), 'warn');
+  });
 
   const q = $('#q');
   q.addEventListener('input', () => { query = q.value; renderTabs(); renderList(); });
@@ -330,6 +350,252 @@ function mountMain() {
   bindDrag();
 }
 
+/* ───────────── modes: items / notes / my day ───────────── */
+let mode = 'items';
+try { mode = localStorage.getItem('mode') || 'items'; } catch { /* ignore */ }
+
+function setMode(m) {
+  mode = m;
+  try { localStorage.setItem('mode', m); } catch { /* ignore */ }
+  renderMode();
+}
+
+function renderMode() {
+  $$('.modes button', panel).forEach((b) => b.classList.toggle('on', b.dataset.mode === mode));
+  for (const v of ['items', 'notes', 'day']) $(`#v-${v}`).classList.toggle('hidden', v !== mode);
+  const foot = $('#foot');
+  foot.classList.toggle('hidden', mode === 'day');
+  foot.innerHTML = mode === 'notes'
+    ? `<button class="primary" data-action="add-note">${icon('plus')} פתק חדש</button>`
+    : `<button class="primary" data-action="add-item">${icon('plus')} פריט חדש</button>`;
+  if (mode === 'items') { renderTabs(); renderList(); }
+  if (mode === 'notes') renderNotes();
+  if (mode === 'day') renderDay();
+}
+
+/* workday progress bar */
+function workdayInfo() {
+  const c = S.config;
+  const now = new Date();
+  const isDay = (c.workDays || []).includes(now.getDay());
+  const ws = hmToMin(c.workStart);
+  const we = hmToMin(c.workEnd);
+  const m = now.getHours() * 60 + now.getMinutes();
+  const pct = Math.max(0, Math.min(100, Math.round(((m - ws) / (we - ws)) * 100)));
+  let note;
+  if (m < ws) note = `מתחיל ב-${c.workStart}`;
+  else if (m >= we) note = 'סיימת להיום';
+  else note = `נשארו ${fmtMin(we - m)}`;
+  return { isDay, pct: m < ws ? 0 : pct, note, ws, we };
+}
+
+function renderWorkday() {
+  const el = $('#workday');
+  if (!el) return;
+  const w = workdayInfo();
+  el.classList.toggle('hidden', !w.isDay);
+  if (!w.isDay) return;
+  el.innerHTML = `
+    <div class="wd-top"><span>${icon('sun')} יום עבודה <b>${w.pct}%</b></span><span class="muted">${w.note}</span></div>
+    <div class="wd-bar"><div class="wd-fill ${w.pct >= 100 ? 'done' : ''}" style="width:${w.pct}%"></div></div>`;
+}
+setInterval(() => { if (view === 'main') renderWorkday(); }, 30000);
+
+/* notes */
+const notesSorted = () => S.data.notes.slice().sort((a, b) => (b.pinned - a.pinned) || ((b.updatedAt || 0) - (a.updatedAt || 0)));
+
+function noteHTML(n) {
+  const c = COLORS[n.color];
+  const body = n.checklist
+    ? `<div class="n-checks">${(n.checks || []).map((k) => `<div class="n-check ${k.done ? 'done' : ''}" data-action="note-check" data-cid="${k.id}">${icon(k.done ? 'checkbox' : 'square')}<span dir="auto">${esc(k.text)}</span></div>`).join('')}</div>`
+    : `<div class="n-text" dir="auto">${esc(n.text)}</div>`;
+  return `
+    <div class="note ${n.color ? 'colored' : ''}" data-action="note-open" data-nid="${n.id}" ${c ? `style="--c:${c[1]}"` : ''}>
+      ${n.pinned ? `<span class="n-pin">${icon('pin')}</span>` : ''}
+      ${n.title ? `<div class="n-title" dir="auto">${esc(n.title)}</div>` : ''}
+      ${body}
+    </div>`;
+}
+
+function renderNotes() {
+  const box = $('#notes');
+  if (!box) return;
+  const ns = notesSorted();
+  box.innerHTML = ns.length
+    ? `<div class="notes-grid">${ns.map(noteHTML).join('')}</div>`
+    : `<div class="empty"><div class="big">🗒️</div>עוד אין פתקים.<br>כותבים למעלה ו-Enter, או מכל מקום במחשב: <kbd>${esc(S.quickHotkeyLabel || '')}</kbd></div>`;
+}
+
+function openNoteEditor(note) {
+  const isNew = !note;
+  const d = note ? JSON.parse(JSON.stringify(note)) : { id: null, title: '', text: '', checklist: false, checks: [], color: '', pinned: false };
+  showModal(`
+    <h3>${isNew ? 'פתק חדש' : 'פתק'}</h3>
+    <input class="n-t" placeholder="כותרת (רשות)" dir="auto">
+    <div class="n-body"></div>
+    <div class="n-tools">
+      <button class="ghost sm n-mode">${icon('checkbox')} <span></span></button>
+      <button class="ghost sm n-pinb">${icon('pin')} <span></span></button>
+    </div>
+    <div class="lbl-t">צבע</div>
+    <div class="swatches"></div>
+    <div class="err m-err"></div>
+    <div class="m-actions">
+      ${isNew ? '' : '<button class="danger m-del">מחיקה</button>'}
+      <span class="spacer"></span>
+      <button class="ghost m-cancel">ביטול</button>
+      <button class="primary m-save">שמירה</button>
+    </div>`, (m) => {
+    $('.n-t', m).value = d.title || '';
+    const body = $('.n-body', m);
+    const drawBody = () => {
+      if (d.checklist) {
+        body.innerHTML = `<div class="n-edit-checks">${d.checks.map((k, i) => `
+          <div class="n-ec" data-i="${i}"><button class="icon-btn sm n-ecb">${icon(k.done ? 'checkbox' : 'square')}</button><input class="n-eci" dir="auto"><button class="icon-btn sm n-ecx">${icon('x')}</button></div>`).join('')}</div>
+          <button class="ghost sm n-addc">${icon('plus')} שורה</button>`;
+        $$('.n-ec', body).forEach((row) => { $('.n-eci', row).value = d.checks[Number(row.dataset.i)].text; });
+      } else {
+        body.innerHTML = '<textarea class="n-x" rows="7" dir="auto" placeholder="הפתק…"></textarea>';
+        $('.n-x', body).value = d.text || '';
+      }
+      $('.n-mode span', m).textContent = d.checklist ? 'טקסט רגיל' : 'רשימת סימון';
+      $('.n-pinb span', m).textContent = d.pinned ? 'ביטול נעיצה' : 'נעיצה למעלה';
+      $('.n-pinb', m).classList.toggle('on', d.pinned);
+    };
+    const pull = () => {
+      d.title = $('.n-t', m).value;
+      if (d.checklist) $$('.n-ec', body).forEach((row) => { d.checks[Number(row.dataset.i)].text = $('.n-eci', row).value; });
+      else d.text = $('.n-x', body).value;
+    };
+    drawBody();
+    bindLook(m, d, [], true);
+    body.addEventListener('click', (e) => {
+      const row = e.target.closest('.n-ec');
+      if (e.target.closest('.n-addc')) { pull(); d.checks.push({ id: rid(), text: '', done: false }); drawBody(); const ins = $$('.n-eci', body); ins[ins.length - 1].focus(); return; }
+      if (!row) return;
+      pull();
+      const i = Number(row.dataset.i);
+      if (e.target.closest('.n-ecb')) { d.checks[i].done = !d.checks[i].done; drawBody(); }
+      if (e.target.closest('.n-ecx')) { d.checks.splice(i, 1); drawBody(); }
+    });
+    body.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target.classList.contains('n-eci')) {
+        e.preventDefault();
+        pull();
+        const i = Number(e.target.closest('.n-ec').dataset.i);
+        d.checks.splice(i + 1, 0, { id: rid(), text: '', done: false });
+        drawBody();
+        $$('.n-eci', body)[i + 1].focus();
+      }
+    });
+    $('.n-mode', m).onclick = () => {
+      pull();
+      if (d.checklist) {
+        d.text = d.checks.map((k) => k.text).filter(Boolean).join('\n');
+      } else {
+        const lines = String(d.text || '').split('\n').map((s) => s.trim()).filter(Boolean);
+        d.checks = (lines.length ? lines : ['']).map((t) => ({ id: rid(), text: t, done: false }));
+      }
+      d.checklist = !d.checklist;
+      drawBody();
+    };
+    $('.n-pinb', m).onclick = () => { pull(); d.pinned = !d.pinned; drawBody(); };
+    $('.m-cancel', m).onclick = closeModal;
+    const del = $('.m-del', m);
+    if (del) {
+      del.onclick = async () => {
+        if (!del.dataset.sure) { del.dataset.sure = '1'; del.textContent = 'בטוח? לחיצה נוספת'; return; }
+        const r = await api.call('notes:delete', { id: note.id });
+        if (r.ok) { closeModal(); toast('הפתק נמחק'); }
+      };
+    }
+    $('.m-save', m).onclick = async () => {
+      pull();
+      d.checks = d.checks.filter((k) => k.text.trim());
+      if (!d.title.trim() && !String(d.text || '').trim() && !d.checks.length) { $('.m-err', m).textContent = 'הפתק ריק'; return; }
+      const r = await api.call('notes:save', { note: d });
+      if (!r.ok) { $('.m-err', m).textContent = errText(r); return; }
+      closeModal();
+    };
+  }, 'tall');
+}
+
+async function toggleNoteCheck(nid, cid) {
+  const n = S.data.notes.find((x) => x.id === nid);
+  if (!n) return;
+  const d = JSON.parse(JSON.stringify(n));
+  const k = d.checks.find((x) => x.id === cid);
+  if (!k) return;
+  k.done = !k.done;
+  await api.call('notes:save', { note: d });
+}
+
+/* my day */
+let daySummary = null;
+async function renderDay() {
+  const box = $('#day');
+  if (!box) return;
+  const r = await api.call('activity:get');
+  if (!r.ok) return;
+  daySummary = r.summary;
+  const s = daySummary;
+  const t = s.today.stats;
+  const c = S.config;
+  const goal = c.waterGoal || 8;
+  const ws = hmToMin(c.workStart);
+  const we = hmToMin(c.workEnd);
+  const from = Math.max(0, Math.min(ws - 60, t.arrival != null ? Math.floor(t.arrival / 60) * 60 : ws - 60));
+  const to = Math.min(1440, Math.max(we + 60, t.leave != null ? Math.ceil(t.leave / 60) * 60 : we + 60));
+  const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+  // timeline runs
+  const runs = [];
+  const line = s.today.line;
+  for (let i = from; i < to;) {
+    let ch = line[i];
+    if (ch === '.' && t.arrival != null && i > t.arrival && i < t.leave) ch = 'b'; // asleep / no data inside the day = break
+    let j = i + 1;
+    while (j < to) {
+      let cj = line[j];
+      if (cj === '.' && t.arrival != null && j > t.arrival && j < t.leave) cj = 'b';
+      if (cj !== ch) break;
+      j++;
+    }
+    runs.push([i, j, ch]);
+    i = j;
+  }
+  const span = to - from;
+  const ticks = [];
+  for (let h = Math.ceil(from / 60); h * 60 <= to; h += (span > 720 ? 3 : 2)) ticks.push(h * 60);
+  const maxWeek = Math.max(60, ...s.week.map((d) => d.active));
+
+  box.innerHTML = `
+    <div class="day-track ${s.enabled ? '' : 'off'}">
+      <span>${icon('clock')} מעקב שעות: <b>${s.enabled ? 'פועל' : 'כבוי'}</b></span>
+      <button class="switch ${s.enabled ? 'on' : ''}" data-action="track-toggle" title="${s.enabled ? 'כיבוי המעקב' : 'הפעלת המעקב'}"><span></span></button>
+    </div>
+    ${s.enabled ? '' : `<p class="muted small center">כשהמעקב כבוי לא נרשם דבר. פס יום העבודה והתזכורות ממשיכים לעבוד.</p>`}
+    <div class="stats">
+      <div class="stat"><b>${fmtMin(t.active)}</b><span>שעות פעילות</span></div>
+      <div class="stat"><b>${t.breaks}</b><span>הפסקות</span></div>
+      <div class="stat"><b>${fmtMin(t.breakMinutes)}</b><span>סה״כ הפסקות</span></div>
+    </div>
+    <div class="sec-t">ציר היום</div>
+    <div class="tl">${runs.map(([a, b, ch]) => `<div class="tl-${ch === 'w' ? 'w' : ch === 'b' ? 'b' : ch === 'o' ? 'o' : 'n'}" style="width:${((b - a) / span) * 100}%" title="${clock(a)}–${clock(b)}"></div>`).join('')}
+      ${nowMin >= from && nowMin <= to ? `<div class="tl-now" style="left:${((nowMin - from) / span) * 100}%"></div>` : ''}</div>
+    <div class="tl-axis">${ticks.map((m) => `<span style="left:${((m - from) / span) * 100}%">${clock(m)}</span>`).join('')}</div>
+    <div class="tl-legend"><span><i class="lg-w"></i>עבודה</span><span><i class="lg-b"></i>הפסקה (${s.breakMin}+ דק׳)</span><span><i class="lg-o"></i>לא נמדד</span></div>
+    <div class="kv"><span>הגעה (פעילות ראשונה)</span><b dir="ltr">${t.arrival != null ? clock(t.arrival) : '—'}</b></div>
+    <div class="kv"><span>הפסקה הכי ארוכה</span><b>${t.longest ? `${t.longest} דק׳ (${clock(t.longestAt)})` : '—'}</b></div>
+    <div class="kv"><span>ממוצע השבוע (ימים קודמים)</span><b>${s.weekAvg != null ? `${fmtMin(s.weekAvg)} שעות` : '—'}</b></div>
+    <div class="sec-t">${icon('droplet')} מים היום <span class="muted">${s.today.water} / ${goal} כוסות</span></div>
+    <div class="cups">${Array.from({ length: Math.max(goal, s.today.water) }, (_, i) => `<span class="cup ${i < s.today.water ? 'full' : ''}"></span>`).join('')}</div>
+    <div class="btns"><button class="ghost sm" data-action="water" data-d="1">${icon('plus')} שתיתי כוס</button>${s.today.water ? `<button class="ghost sm" data-action="water" data-d="-1">${icon('minus')} ביטול</button>` : ''}</div>
+    <div class="sec-t">השבוע</div>
+    <div class="week">${s.week.filter((d) => (c.workDays || []).includes(d.dow) || d.active).map((d) => `
+      <div class="wk ${d.date === s.today.date ? 'today' : ''}"><div class="wk-bar"><div style="height:${Math.round((d.active / maxWeek) * 100)}%"></div></div><span>${DOW[d.dow]}</span><small>${d.active ? fmtMin(d.active) : ''}</small></div>`).join('')}</div>`;
+}
+setInterval(() => { if (view === 'main' && mode === 'day' && S.ui.expanded) renderDay(); }, 60000);
+
 function renderMain() {
   $('[data-action="pin"]', panel).classList.toggle('on', !!S.ui.pinned);
   const hk = $('#hk');
@@ -340,8 +606,8 @@ function renderMain() {
   $('#banner').innerHTML = t.configured && !t.unlocked
     ? `<div class="banner">${icon('users')}<span>כספת הצוות נעולה</span><button class="ghost sm" data-action="unlock-team">פתיחה</button></div>` : '';
   renderLaunch();
-  renderTabs();
-  renderList();
+  renderWorkday();
+  renderMode();
 }
 
 function renderLaunch() {
@@ -364,7 +630,9 @@ async function runLaunch(id, el) {
 const tabsSorted = () => S.data.tabs.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
 const tabById = (id) => S.data.tabs.find((t) => t.id === id);
 const findItem = (id) => S.data.items.find((i) => i.id === id);
-const itemsOf = (tabId) => S.data.items.filter((i) => i.tabId === tabId).sort((a, b) => (a.order || 0) - (b.order || 0));
+const itemsOf = (tabId) => S.data.items.filter((i) => i.tabId === tabId).sort((a, b) => (!!a.done - !!b.done) || (a.order || 0) - (b.order || 0));
+let hideDone = false;
+try { hideDone = localStorage.getItem('hideDone') === '1'; } catch { /* ignore */ }
 
 function setQuery(v) {
   query = v;
@@ -403,18 +671,24 @@ function itemHTML(it, showTab) {
     if (f.kind === 'secret') actions += `<button class="icon-btn sm" data-action="reveal" data-fid="${f.id}" title="הצגה">${icon(revealed.has(f.id) ? 'eyeOff' : 'eye')}</button>`;
     actions += `<button class="icon-btn sm" data-action="copy-field" data-fid="${f.id}" title="העתקה">${icon('copy')}</button>`;
   }
+  actions = `<button class="icon-btn sm done-btn" data-action="toggle-done" title="${it.done ? 'ביטול "בוצע"' : 'סימון כבוצע'}">${icon('check')}</button>${actions}`;
   actions += `<button class="icon-btn sm" data-action="edit-item" title="עריכה">${icon('edit')}</button>`;
   const tab = showTab ? tabById(it.tabId) : null;
+  const col = COLORS[it.color];
+  const tint = it.done ? 'style="--c:#2E9E5B"' : (col ? `style="--c:${col[1]}"` : '');
+  const tile = it.done
+    ? `<span class="kind k-done">${icon('check')}</span>`
+    : `<span class="kind ${it.color ? '' : `k-${multi ? 'stack' : kind}`}" ${tileStyle(it.color)}>${icon(it.icon || (multi ? 'stack' : KIND_ICON[kind] || 'text'))}</span>`;
 
   return `
-  <div class="item ${multi ? 'multi' : ''} ${open ? 'open' : ''}" data-id="${it.id}" draggable="${query ? 'false' : 'true'}">
+  <div class="item ${multi ? 'multi' : ''} ${open ? 'open' : ''} ${(col || it.done) ? 'tinted' : ''} ${it.done ? 'done' : ''}" ${tint} data-id="${it.id}" draggable="${query ? 'false' : 'true'}">
     <div class="row" data-action="${multi ? 'toggle' : 'copy-field'}" ${!multi && f ? `data-fid="${f.id}"` : ''}
       title="${multi ? 'לחיצה פותחת' : 'לחיצה מעתיקה'}">
-      <span class="kind ${it.color ? '' : `k-${multi ? 'stack' : kind}`}" ${tileStyle(it.color)}>${icon(it.icon || (multi ? 'stack' : KIND_ICON[kind] || 'text'))}</span>
+      ${tile}
       <div class="txt">
         <div class="title">${esc(it.title || preview(f) || '(ללא כותרת)')}</div>
         ${tab ? `<div class="from">${esc(tab.icon || '')} ${esc(tab.name)}</div>` : ''}
-        <div class="sub" dir="auto">${esc(sub)}</div>
+        <div class="sub" dir="auto">${it.done ? `<span class="done-tag">בוצע · ${esc(whenText(it.doneAt))}</span> ` : ''}${esc(sub)}</div>
       </div>
       <div class="row-actions">${actions}</div>
       ${multi ? `<span class="chev">${icon('chevron')}</span>` : ''}
@@ -474,7 +748,10 @@ function renderList() {
   const all = itemsOf(tab.id);
   const used = Object.keys(COLORS).filter((c) => all.some((it) => it.color === c));
   if (colorFilter && !used.includes(colorFilter)) colorFilter = null;
-  const items = colorFilter ? all.filter((it) => it.color === colorFilter) : all;
+  const doneCount = all.filter((it) => it.done).length;
+  const items = all.filter((it) => (!colorFilter || it.color === colorFilter) && !(hideDone && it.done));
+  const doneBtn = doneCount
+    ? `<button class="icon-btn sm ${hideDone ? 'on' : ''}" data-action="hide-done" title="${hideDone ? `הצגת ${doneCount} שבוצעו` : 'הסתרת מה שבוצע'}">${icon(hideDone ? 'eyeOff' : 'checkbox')}</button>` : '';
   const dots = used.length
     ? `<span class="cfilter">${used.map((c) => `<button class="cdot ${c === colorFilter ? 'on' : ''}" data-action="cfilter" data-c="${c}" title="רק ${COLORS[c][0]}" style="--c:${COLORS[c][1]}"></button>`).join('')}${colorFilter ? `<button class="cdot-x" data-action="cfilter" data-c="" title="הצגת הכל">${icon('x')}</button>` : ''}</span>` : '';
   list.innerHTML = `
@@ -484,6 +761,7 @@ function renderList() {
       ${tab.vault === 'team' ? '<span class="pill">צוות</span>' : ''}
       <span class="grow"></span>
       ${dots}
+      ${doneBtn}
       <button class="icon-btn sm" data-action="edit-tab" data-id="${tab.id}" title="עריכת הטאב">${icon('edit')}</button>
     </div>
     ${items.length ? items.map((it) => itemHTML(it, false)).join('')
@@ -532,6 +810,23 @@ async function onPanelClick(e) {
       break;
     case 'edit-item': e.stopPropagation(); openItemEditor(item); break;
     case 'add-item': openItemEditor(null); break;
+    case 'mode': setMode(a.dataset.mode); break;
+    case 'toggle-done': {
+      e.stopPropagation();
+      const r = await api.call('data:toggleDone', { vault: item.vault, id: item.id });
+      if (r.ok) toast(r.done ? 'בוצע ✓' : 'הוחזר לפתוח');
+      break;
+    }
+    case 'hide-done':
+      hideDone = !hideDone;
+      try { localStorage.setItem('hideDone', hideDone ? '1' : '0'); } catch { /* ignore */ }
+      renderList();
+      break;
+    case 'add-note': openNoteEditor(null); break;
+    case 'note-open': openNoteEditor(S.data.notes.find((n) => n.id === a.dataset.nid)); break;
+    case 'note-check': e.stopPropagation(); toggleNoteCheck(a.closest('.note').dataset.nid, a.dataset.cid); break;
+    case 'water': await api.call('activity:water', { delta: Number(a.dataset.d) }); renderDay(); break;
+    case 'track-toggle': await api.call('config:set', { patch: { trackEnabled: !S.config.trackEnabled } }); renderDay(); break;
     case 'cfilter': colorFilter = a.dataset.c === colorFilter ? null : (a.dataset.c || null); renderList(); break;
     case 'launch': runLaunch(a.dataset.lid, a.querySelector('.ltile')); break;
     case 'add-launch': openLauncherEditor(null); break;
@@ -674,6 +969,7 @@ function openItemEditor(item) {
     <div class="swatches"></div>
     <div class="lbl-t">אייקון</div>
     <div class="icon-grid"></div>
+    <label class="check"><input type="checkbox" class="m-done"><span>בוצע <small>הפריט הופך לירוק ויורד לתחתית הטאב</small></span></label>
     <div class="lbl-t">תוכן <span class="muted small">— שדה אחד: לחיצה מעתיקה. כמה שדות: נפתח כמו מחסנית.</span></div>
     <div class="m-fields"></div>
     <button class="ghost add-field">${icon('plus')} הוספת שדה</button>
@@ -687,6 +983,7 @@ function openItemEditor(item) {
     $('.m-title', m).value = draft.title || '';
     $('.m-tab', m).value = draft.tabId;
     bindLook(m, draft, ITEM_ICONS, true);
+    $('.m-done', m).checked = !!draft.done;
 
     const box = $('.m-fields', m);
     const draw = () => {
@@ -766,7 +1063,7 @@ function openItemEditor(item) {
       const r = await api.call('data:saveItem', {
         vault: target.vault,
         fromVault: item ? item.vault : null,
-        item: { id: draft.id, tabId, title: finalTitle, fields, color: draft.color || '', icon: draft.icon || '' },
+        item: { id: draft.id, tabId, title: finalTitle, fields, color: draft.color || '', icon: draft.icon || '', done: $('.m-done', m).checked },
       });
       if (!r.ok) { $('.m-err', m).textContent = errText(r); return; }
       activeTab = tabId;
@@ -784,7 +1081,7 @@ function openItemEditor(item) {
 /* color + icon pickers (shared by the item and button editors) */
 function bindLook(m, draft, icons, allowNone) {
   const sw = $('.swatches', m);
-  const ig = $('.icon-grid', m);
+  const ig = $('.icon-grid', m) || document.createElement('div');
   const draw = () => {
     sw.innerHTML = (allowNone ? `<button class="swatch none ${!draft.color ? 'on' : ''}" data-c="" title="בלי צבע">${icon('x')}</button>` : '')
       + Object.entries(COLORS).map(([k, [name, hex]]) => `<button class="swatch ${draft.color === k ? 'on' : ''}" data-c="${k}" title="${name}" style="--c:${hex}"></button>`).join('');
@@ -1131,6 +1428,8 @@ function accelFromEvent(e) {
   return [...mods, key].join('+');
 }
 
+const TIME_OPTS = Array.from({ length: 38 }, (_, i) => clock(300 + i * 30)).map((t) => `<option value="${t}">${t}</option>`).join('');
+
 function openSettings() {
   const c = S.config;
   const p = S.vaults.personal;
@@ -1156,7 +1455,27 @@ function openSettings() {
       ${S.hotkeyOk ? '' : `<p class="warn small">${icon('warn')}<span>קיצור החיפוש תפוס על ידי תוכנה אחרת — כדאי לבחור צירוף אחר.</span></p>`}
       <div class="set-row"><span>מקלדת קיצורים</span><input class="hotkey" data-k="launcherHotkey" readonly title="לוחצים כאן ואז על צירוף המקשים הרצוי"></div>
       ${S.launcherHotkeyOk ? '' : `<p class="warn small">${icon('warn')}<span>קיצור המקלדת תפוס — כדאי לבחור צירוף אחר.</span></p>`}
+      <div class="set-row"><span>פתק מהיר</span><input class="hotkey" data-k="quickNoteHotkey" readonly title="לוחצים כאן ואז על צירוף המקשים הרצוי"></div>
+      ${S.quickHotkeyOk ? '' : `<p class="warn small">${icon('warn')}<span>קיצור הפתק המהיר תפוס — כדאי לבחור צירוף אחר.</span></p>`}
       <p class="muted small">לוחצים על השדה ואז על הצירוף החדש (למשל Ctrl+Shift+K).</p>
+    </div>
+
+    <div class="sec">
+      <h4>${icon('sun')} יום עבודה ותזכורות</h4>
+      <div class="set-row"><span>שעות</span><select class="s-ws inp-sm">${TIME_OPTS}</select> <span class="muted">עד</span> <select class="s-we inp-sm">${TIME_OPTS}</select></div>
+      <div class="set-row"><span>ימים</span><div class="days">${DOW.map((d, i) => `<button class="day-b" data-d="${i}">${d}</button>`).join('')}</div></div>
+      <label class="check"><input type="checkbox" class="s-hourly"><span>התראה בכל שעה עגולה <small>"שעה 3 מתוך 8 הושלמה"</small></span></label>
+      <label class="check"><input type="checkbox" class="s-water"><span>תזכורת לשתות מים</span></label>
+      <div class="set-row"><span>כל כמה זמן</span><select class="s-wm"><option value="45">45 דקות</option><option value="60">שעה (יחד עם התראת השעה)</option><option value="90">שעה וחצי</option><option value="120">שעתיים</option></select></div>
+      <div class="set-row"><span>יעד כוסות ביום</span><select class="s-wg">${[4, 5, 6, 7, 8, 9, 10, 12].map((n) => `<option value="${n}">${n}</option>`).join('')}</select></div>
+      <div class="btns"><button class="ghost" data-s="test-toast">${icon('bell')} איך זה ייראה</button></div>
+    </div>
+
+    <div class="sec">
+      <h4>${icon('clock')} מעקב שעות</h4>
+      <label class="check"><input type="checkbox" class="s-track"><span>מעקב שעות פועל <small>נמדד רק אם יש פעילות עכבר/מקלדת — לא אילו תוכנות או אתרים</small></span></label>
+      <div class="set-row"><span>הפסקה אחרי</span><select class="s-break"><option value="5">5 דקות בלי פעילות</option><option value="10">10 דקות בלי פעילות</option><option value="15">15 דקות בלי פעילות</option></select></div>
+      <div class="btns"><button class="ghost" data-s="clear-activity">${icon('x')} מחיקת היסטוריית שעות</button></div>
     </div>
 
     <div class="sec">
@@ -1221,9 +1540,34 @@ function openSettings() {
     lg.checked = !!c.launchAtLogin;
     lg.onchange = () => set({ launchAtLogin: lg.checked });
 
+    const ws = $('.s-ws', m);
+    const we = $('.s-we', m);
+    ws.value = c.workStart;
+    we.value = c.workEnd;
+    ws.onchange = () => { if (ws.value < we.value) set({ workStart: ws.value }); else { ws.value = S.config.workStart; toast('שעת ההתחלה צריכה להיות לפני הסיום', 'warn'); } };
+    we.onchange = () => { if (we.value > ws.value) set({ workEnd: we.value }); else { we.value = S.config.workEnd; toast('שעת הסיום צריכה להיות אחרי ההתחלה', 'warn'); } };
+    const drawDays = () => $$('.day-b', m).forEach((b) => b.classList.toggle('on', (S.config.workDays || []).includes(Number(b.dataset.d))));
+    drawDays();
+    $('.days', m).onclick = async (e) => {
+      const b = e.target.closest('.day-b');
+      if (!b) return;
+      const d = Number(b.dataset.d);
+      const cur = S.config.workDays || [];
+      await set({ workDays: cur.includes(d) ? cur.filter((x) => x !== d) : [...cur, d] });
+      drawDays();
+    };
+    const bindCheck = (sel, key) => { const el = $(sel, m); el.checked = !!c[key]; el.onchange = () => set({ [key]: el.checked }); };
+    bindCheck('.s-hourly', 'hourlyNotify');
+    bindCheck('.s-water', 'waterReminder');
+    bindCheck('.s-track', 'trackEnabled');
+    const bindSel = (sel, key) => { const el = $(sel, m); el.value = String(c[key]); el.onchange = () => set({ [key]: Number(el.value) }); };
+    bindSel('.s-wm', 'waterMinutes');
+    bindSel('.s-wg', 'waterGoal');
+    bindSel('.s-break', 'breakMinutes');
+
     $$('.hotkey', m).forEach((hk) => {
       const k = hk.dataset.k;
-      const label = () => (k === 'hotkey' ? S.hotkeyLabel : S.launcherHotkeyLabel) || '—';
+      const label = () => ({ hotkey: S.hotkeyLabel, launcherHotkey: S.launcherHotkeyLabel, quickNoteHotkey: S.quickHotkeyLabel }[k]) || '—';
       hk.value = label();
       hk.addEventListener('focus', () => { hk.value = 'לחצו על הצירוף…'; });
       hk.addEventListener('blur', () => { hk.value = label(); });
@@ -1236,7 +1580,7 @@ function openSettings() {
         const r = await api.call('state:get');
         S = r.state;
         hk.blur();
-        const ok = k === 'hotkey' ? S.hotkeyOk : S.launcherHotkeyOk;
+        const ok = { hotkey: S.hotkeyOk, launcherHotkey: S.launcherHotkeyOk, quickNoteHotkey: S.quickHotkeyOk }[k];
         toast(ok ? `הקיצור עודכן: ${label()}` : 'הקיצור תפוס — נסו צירוף אחר', ok ? 'ok' : 'warn');
       });
     });
@@ -1254,6 +1598,8 @@ function openSettings() {
       if (a === 'reveal-personal') api.call('vault:reveal', { which: 'personal' });
       if (a === 'reveal-team') api.call('vault:reveal', { which: 'team' });
       if (a === 'connect-team') openTeamConnect();
+      if (a === 'test-toast') api.call('toast:test', { kind: 'hour' });
+      if (a === 'clear-activity') confirmModal('מחיקת היסטוריית שעות', 'כל נתוני השעות, ההפסקות והמים יימחקו — בכל המחשבים. אי אפשר לשחזר.', 'מחיקה', async () => { await api.call('activity:clear'); toast('היסטוריית השעות נמחקה'); }, true);
       if (a === 'unlock-team') openTeamUnlock();
       if (a === 'disc-team') confirmModal('ניתוק מכספת הצוות', 'הטאבים המשותפים יוסרו מהסרגל במחשב הזה. הקובץ המשותף עצמו לא נמחק.', 'ניתוק', () => api.call('vault:disconnect', { which: 'team' }), true);
       if (a === 'quit') confirmModal('יציאה מהסרגל', 'הסרגל ייסגר עד ההפעלה הבאה של המחשב (או עד שתפתחו אותו שוב).', 'יציאה', () => api.call('app:quit'), true);

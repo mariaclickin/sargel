@@ -10,6 +10,17 @@ const DEFAULTS = {
   width: 390, // expanded panel width
   hotkey: 'CommandOrControl+Shift+Space',
   launcherHotkey: 'CommandOrControl+Shift+K',
+  quickNoteHotkey: 'CommandOrControl+Shift+Y', // Ctrl+Shift+N is Chrome's incognito window
+  // workday + reminders
+  workStart: '09:00',
+  workEnd: '17:00',
+  workDays: [0, 1, 2, 3, 4], // Sunday..Thursday
+  trackEnabled: true,
+  breakMinutes: 10,
+  hourlyNotify: true,
+  waterReminder: true,
+  waterMinutes: 60,
+  waterGoal: 8,
   autoLockMinutes: 15, // 0 = never
   launchAtLogin: true,
   theme: 'system', // 'system' | 'light' | 'dark'

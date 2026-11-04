@@ -1,7 +1,7 @@
 {
   "name": "sargel",
   "productName": "Sargel",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "הסרגל — סרגל צד לשליפה מהירה של טקסטים, קישורים, פרטי לקוחות וגישות",
   "main": "src/main.js",
   "author": "Click-In 360",
@@ -13,7 +13,7 @@
   },
   "scripts": {
     "start": "electron .",
-    "test": "node --test test/vault.test.js",
+    "test": "node --test test/vault.test.js test/activity.test.js",
     "shots": "node scripts/shots.js",
     "dist": "electron-builder --publish never",
     "dist:win": "electron-builder --win --publish never",
