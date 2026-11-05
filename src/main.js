@@ -543,6 +543,8 @@ function publicState() {
     sessions: p.data.sessions.filter((x) => !x.deleted),
     checks: p.data.tchecks.filter((x) => !x.deleted),
     jobs: p.data.jobs.filter((x) => !x.deleted),
+    blocks: p.data.tblocks.filter((x) => !x.deleted),
+    subs: p.data.tsubs.filter((x) => !x.deleted),
     active: trkActive(p),
   } : null;
   return {
@@ -989,8 +991,34 @@ function trkActive(v) {
 
 function setActive(v, patch) {
   const i = v.data.tstate.findIndex((x) => x.id === 'active');
-  const doc = { id: 'active', name: '', sessionId: '', ...(i >= 0 && !v.data.tstate[i].deleted ? v.data.tstate[i] : {}), ...patch, updatedAt: Date.now() };
+  const doc = { id: 'active', name: '', blockId: '', subId: '', sessionId: '', ...(i >= 0 && !v.data.tstate[i].deleted ? v.data.tstate[i] : {}), ...patch, updatedAt: Date.now() };
   if (i >= 0) v.data.tstate[i] = doc; else v.data.tstate.push(doc);
+}
+
+const liveBlock = (v, id) => v.data.tblocks.find((b) => b.id === id && !b.deleted);
+const liveSub = (v, id) => v.data.tsubs.find((s) => s.id === id && !s.deleted);
+
+/** one-time: sessions from before blocks existed are grouped into a block per name */
+function migrateBlocks(v) {
+  let changed = false;
+  const now = Date.now();
+  const byName = new Map(v.data.tblocks.filter((b) => !b.deleted).map((b) => [b.name, b]));
+  for (const s of v.data.sessions) {
+    if (s.deleted || s.blockId) continue;
+    let b = byName.get(s.name);
+    if (!b) {
+      b = { id: uid(), name: s.name, done: false, doneAt: 0, createdAt: s.start, order: 0, updatedAt: now };
+      v.data.tblocks.push(b);
+      byName.set(b.name, b);
+    }
+    s.blockId = b.id;
+    s.subId = s.subId || '';
+    s.updatedAt = now;
+    changed = true;
+  }
+  const a = trkActive(v);
+  if (a && a.name && !a.blockId && byName.get(a.name)) { setActive(v, { blockId: byName.get(a.name).id }); changed = true; }
+  return changed;
 }
 
 function endRunning(v, at = Date.now()) {
@@ -1002,16 +1030,30 @@ function endRunning(v, at = Date.now()) {
   return true;
 }
 
-function startBlock({ name }) {
+/** start (or continue) a block — optionally on one of its steps */
+function startBlock({ blockId, subId, name }) {
   const v = requireVault('personal');
-  const n = str(name, 80).trim();
-  if (!n) throw new VaultError('BAD_INPUT');
-  endRunning(v);
   const now = Date.now();
-  const s = { id: uid(), name: n, start: now, end: 0, machine: activity ? activity.machine : '', updatedAt: now };
+  let b = blockId ? liveBlock(v, blockId) : null;
+  if (!b && name) {
+    const n = str(name, 80).trim();
+    if (!n) throw new VaultError('BAD_INPUT');
+    b = v.data.tblocks.find((x) => !x.deleted && !x.done && x.name === n);
+    if (!b) {
+      b = { id: uid(), name: n, done: false, doneAt: 0, createdAt: now, order: nextOrder(v.data.tblocks.filter((x) => !x.deleted)), updatedAt: now };
+      v.data.tblocks.push(b);
+    }
+  }
+  if (!b) throw new VaultError('NOT_FOUND');
+  if (b.done) { b.done = false; b.doneAt = 0; b.updatedAt = now; }
+  const sub = subId ? liveSub(v, subId) : null;
+  if (sub && sub.done) { sub.done = false; sub.doneAt = 0; sub.updatedAt = now; }
+  endRunning(v);
+  const s = { id: uid(), name: b.name, blockId: b.id, subId: sub ? sub.id : '', start: now, end: 0, machine: activity ? activity.machine : '', updatedAt: now };
   v.data.sessions.push(s);
-  setActive(v, { name: n, sessionId: s.id });
+  setActive(v, { name: b.name, blockId: b.id, subId: s.subId, sessionId: s.id });
   queueSave('personal');
+  return { blockId: b.id };
 }
 
 function pauseBlock() {
@@ -1022,25 +1064,109 @@ function pauseBlock() {
 function resumeBlock() {
   const v = requireVault('personal');
   const a = trkActive(v);
-  if (a && a.name && !a.sessionId) startBlock({ name: a.name });
+  if (a && a.blockId && !a.sessionId) return startBlock({ blockId: a.blockId, subId: a.subId });
+  return null;
 }
 
 function stopBlock() {
   const v = requireVault('personal');
   endRunning(v);
-  setActive(v, { name: '', sessionId: '' });
+  setActive(v, { name: '', blockId: '', subId: '', sessionId: '' });
   queueSave('personal');
 }
 
-function deleteSessionsByName({ name, date }) {
+function addBlock({ name }) {
+  const v = requireVault('personal');
+  const n = str(name, 80).trim();
+  if (!n) throw new VaultError('BAD_INPUT');
+  const now = Date.now();
+  const b = { id: uid(), name: n, done: false, doneAt: 0, createdAt: now, order: nextOrder(v.data.tblocks.filter((x) => !x.deleted)), updatedAt: now };
+  v.data.tblocks.push(b);
+  queueSave('personal');
+  return { id: b.id };
+}
+
+function renameBlock({ id, name }) {
+  const v = requireVault('personal');
+  const b = liveBlock(v, id);
+  const n = str(name, 80).trim();
+  if (!b || !n) throw new VaultError('BAD_INPUT');
+  b.name = n;
+  b.updatedAt = Date.now();
+  const a = trkActive(v);
+  if (a && a.blockId === id) setActive(v, { name: n });
+  queueSave('personal');
+}
+
+function setBlockDone({ id, done }) {
+  const v = requireVault('personal');
+  const b = liveBlock(v, id);
+  if (!b) throw new VaultError('NOT_FOUND');
+  const a = trkActive(v);
+  if (done && a && a.blockId === id) { endRunning(v); setActive(v, { name: '', blockId: '', subId: '', sessionId: '' }); }
+  b.done = !!done;
+  b.doneAt = done ? Date.now() : 0;
+  b.updatedAt = Date.now();
+  queueSave('personal');
+}
+
+/** deletes the block, its steps and all its recorded time */
+function deleteBlock({ id }) {
   const v = requireVault('personal');
   const now = Date.now();
   const a = trkActive(v);
-  v.data.sessions = v.data.sessions.map((s) => {
-    if (s.deleted || s.name !== name || (date && dateKey(new Date(s.start)) !== date)) return s;
-    if (a && a.sessionId === s.id) setActive(v, { name: '', sessionId: '' });
-    return { id: s.id, deleted: true, updatedAt: now };
-  });
+  if (a && a.blockId === id) { endRunning(v); setActive(v, { name: '', blockId: '', subId: '', sessionId: '' }); }
+  const kill = (x) => ({ id: x.id, deleted: true, updatedAt: now });
+  v.data.tblocks = v.data.tblocks.map((x) => (x.id === id ? kill(x) : x));
+  v.data.tsubs = v.data.tsubs.map((x) => (x.blockId === id && !x.deleted ? kill(x) : x));
+  v.data.sessions = v.data.sessions.map((x) => (x.blockId === id && !x.deleted ? kill(x) : x));
+  queueSave('personal');
+}
+
+function addSub({ blockId, text }) {
+  const v = requireVault('personal');
+  const b = liveBlock(v, blockId);
+  const t = str(text, 200).trim();
+  if (!b || !t) throw new VaultError('BAD_INPUT');
+  const now = Date.now();
+  v.data.tsubs.push({ id: uid(), blockId, text: t, done: false, doneAt: 0, order: nextOrder(v.data.tsubs.filter((x) => !x.deleted && x.blockId === blockId)), updatedAt: now });
+  if (b.done) { b.done = false; b.doneAt = 0; b.updatedAt = now; }
+  queueSave('personal');
+}
+
+function toggleSub({ id }) {
+  const v = requireVault('personal');
+  const s = liveSub(v, id);
+  if (!s) throw new VaultError('NOT_FOUND');
+  s.done = !s.done;
+  s.doneAt = s.done ? Date.now() : 0;
+  s.updatedAt = Date.now();
+  const a = trkActive(v);
+  // finishing the step that's running: move on to the next open step (or the block itself)
+  if (s.done && a && a.subId === id) {
+    const next = v.data.tsubs.filter((x) => !x.deleted && !x.done && x.blockId === s.blockId).sort((p, q) => (p.order || 0) - (q.order || 0))[0];
+    if (a.sessionId) {
+      endRunning(v);
+      queueSave('personal');
+      return startBlock({ blockId: s.blockId, subId: next ? next.id : '' });
+    }
+    setActive(v, { subId: next ? next.id : '' });
+  }
+  queueSave('personal');
+  return null;
+}
+
+function deleteSub({ id }) {
+  const v = requireVault('personal');
+  const now = Date.now();
+  const a = trkActive(v);
+  if (a && a.subId === id) {
+    if (a.sessionId) { endRunning(v); }
+    setActive(v, { subId: '' });
+  }
+  v.data.tsubs = v.data.tsubs.map((x) => (x.id === id ? { id, deleted: true, updatedAt: now } : x));
+  // the step's time stays on the block
+  for (const s of v.data.sessions) if (!s.deleted && s.subId === id) { s.subId = ''; s.updatedAt = now; }
   queueSave('personal');
 }
 
@@ -1048,6 +1174,7 @@ function deleteSessionsByName({ name, date }) {
 function fixRunning() {
   const v = vaults.personal;
   if (!v || !v.unlocked || !activity) return;
+  if (migrateBlocks(v)) queueSave('personal');
   const a = trkActive(v);
   if (!a || !a.sessionId) { pendingStopAt = 0; return; }
   const s = v.data.sessions.find((x) => x.id === a.sessionId);
@@ -1475,7 +1602,13 @@ function registerIpc() {
   handle('trk:pause', () => pauseBlock());
   handle('trk:resume', () => resumeBlock());
   handle('trk:stop', () => stopBlock());
-  handle('trk:deleteBlock', (a) => deleteSessionsByName(a));
+  handle('trk:addBlock', (a) => addBlock(a));
+  handle('trk:renameBlock', (a) => renameBlock(a));
+  handle('trk:blockDone', (a) => setBlockDone(a));
+  handle('trk:deleteBlock', (a) => deleteBlock(a));
+  handle('trk:addSub', (a) => addSub(a));
+  handle('trk:toggleSub', (a) => toggleSub(a));
+  handle('trk:deleteSub', (a) => deleteSub(a));
   handle('trk:checkAdd', (a) => addCheck(a));
   handle('trk:checkToggle', (a) => toggleCheck(a));
   handle('trk:checkDelete', (a) => deleteCheck(a));
@@ -1605,7 +1738,7 @@ async function boot() {
   if (process.env.SARGEL_SHOTS) {
     // development only: scripted screenshots of every screen
     require('./devshots')({
-      app, state, tstate, tracker: () => tracker, vaults, setExpanded, createVault, openVault, unlockPersonal, lockAll, showSearch, showKeys, broadcast,
+      app, state, tstate, tracker: () => tracker, vaults, setExpanded, trk: { startBlock, toggleSub, addSub }, createVault, openVault, unlockPersonal, lockAll, showSearch, showKeys, broadcast,
       sidebar: () => sidebar, search: () => searchWin, keys: () => keysWin,
       quick: () => quickWin, toastWin: () => toastWin, showQuick, showToast, activity: () => activity,
     });

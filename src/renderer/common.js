@@ -82,6 +82,8 @@ const ICONS = {
   checkbox: '<rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M8 12.5l2.8 2.8L16.5 9"/>',
   square: '<rect x="4" y="4" width="16" height="16" rx="3.5"/>',
   minus: '<path d="M5 12h14"/>',
+  pause: '<rect x="6.5" y="5" width="3.5" height="14" rx="1"/><rect x="14" y="5" width="3.5" height="14" rx="1"/>',
+  rotate: '<path d="M4 12a8 8 0 1 0 2.3-5.7"/><path d="M4 4v4h4"/>',
 };
 
 const DOW = ['א׳', 'ב׳', 'ג׳', 'ד׳', 'ה׳', 'ו׳', 'ש׳'];
