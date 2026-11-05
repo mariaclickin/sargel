@@ -33,6 +33,7 @@ let quitting = false;
 let hotkeyOk = true;
 let launcherHotkeyOk = true;
 let quickHotkeyOk = true;
+let blockHotkeyOk = true;
 let activity = null;
 let screenLocked = false;
 let clipTimer = null;
@@ -322,7 +323,7 @@ function showToast(payload) {
   toastWin.webContents.send('toast:show', payload);
   toastWin.showInactive();
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastWin && toastWin.hide(), 30000);
+  toastTimer = setTimeout(() => toastWin && toastWin.hide(), payload.ttl || 30000);
 }
 
 function setExpanded(v, opts = {}, kind = 'sidebar') {
@@ -434,6 +435,7 @@ function rebuildTrayMenu() {
     { label: `חיפוש מהיר${hk ? `   (${hk})` : ''}`, click: () => showSearch() },
     { label: `מקלדת קיצורים${cfg.get('launcherHotkey') ? `   (${prettyHotkey(cfg.get('launcherHotkey'))})` : ''}`, click: () => showKeys() },
     { label: `פתק מהיר${cfg.get('quickNoteHotkey') ? `   (${prettyHotkey(cfg.get('quickNoteHotkey'))})` : ''}`, click: () => showQuick() },
+    { label: `TIME BLOCK: השהיה / המשך${cfg.get('blockHotkey') ? `   (${prettyHotkey(cfg.get('blockHotkey'))})` : ''}`, click: () => blockToggleWithToast() },
     { type: 'separator' },
     {
       label: 'מעקב שעות',
@@ -473,6 +475,9 @@ function registerHotkey() {
   const q = cfg.get('quickNoteHotkey');
   quickHotkeyOk = q === cfg.get('hotkey') || q === cfg.get('launcherHotkey') ? false
     : reg(q, () => (quickWin && quickWin.isVisible() ? hideQuick() : showQuick()));
+  const bk = cfg.get('blockHotkey');
+  blockHotkeyOk = [cfg.get('hotkey'), cfg.get('launcherHotkey'), q].includes(bk) ? false
+    : reg(bk, () => blockToggleWithToast());
 }
 
 function applyLogin() {
@@ -490,6 +495,7 @@ function applyConfig(patch) {
   if (typeof patch.hotkey === 'string' && patch.hotkey.length < 80) clean.hotkey = patch.hotkey;
   if (typeof patch.launcherHotkey === 'string' && patch.launcherHotkey.length < 80) clean.launcherHotkey = patch.launcherHotkey;
   if (typeof patch.quickNoteHotkey === 'string' && patch.quickNoteHotkey.length < 80) clean.quickNoteHotkey = patch.quickNoteHotkey;
+  if (typeof patch.blockHotkey === 'string' && patch.blockHotkey.length < 80) clean.blockHotkey = patch.blockHotkey;
   const hm = /^([01]\d|2[0-3]):[0-5]\d$/;
   if (hm.test(patch.workStart || '')) clean.workStart = patch.workStart;
   if (hm.test(patch.workEnd || '')) clean.workEnd = patch.workEnd;
@@ -502,7 +508,7 @@ function applyConfig(patch) {
   if ('launchAtLogin' in patch) clean.launchAtLogin = !!patch.launchAtLogin;
   if (['system', 'light', 'dark'].includes(patch.theme)) clean.theme = patch.theme;
   cfg.set(clean);
-  if ('hotkey' in clean || 'launcherHotkey' in clean || 'quickNoteHotkey' in clean) registerHotkey();
+  if (['hotkey', 'launcherHotkey', 'quickNoteHotkey', 'blockHotkey'].some((k) => k in clean)) registerHotkey();
   if ('launchAtLogin' in clean) applyLogin();
   if ('theme' in clean) nativeTheme.themeSource = clean.theme;
   if ('trackerEnabled' in clean && tracker) {
@@ -557,6 +563,8 @@ function publicState() {
     launcherHotkeyLabel: prettyHotkey(cfg.get('launcherHotkey')),
     quickHotkeyOk,
     quickHotkeyLabel: prettyHotkey(cfg.get('quickNoteHotkey')),
+    blockHotkeyOk,
+    blockHotkeyLabel: prettyHotkey(cfg.get('blockHotkey')),
     vaults: { personal: info('personal'), team: info('team') },
     rememberTeam: !!(p && p.unlocked && p.data.settings.teamPassword),
     data,
@@ -848,7 +856,7 @@ function suggestFolders() {
 // ───────────────────────── data operations ─────────────────────────
 const KINDS = new Set(['text', 'link', 'secret']);
 const COLORS = new Set(['purple', 'blue', 'green', 'amber', 'coral', 'red', 'pink', 'gray']);
-const LAUNCH_TYPES = new Set(['web', 'app', 'path', 'copy']);
+const LAUNCH_TYPES = new Set(['web', 'app', 'path', 'copy', 'block']);
 const KEY_RE = /^[0-9A-Z]$/;
 const str = (v, max) => String(v == null ? '' : v).slice(0, max);
 
@@ -1073,6 +1081,49 @@ function stopBlock() {
   endRunning(v);
   setActive(v, { name: '', blockId: '', subId: '', sessionId: '' });
   queueSave('personal');
+}
+
+/**
+ * Pause/resume from a hotkey or a launcher.
+ * blockId empty → toggle the current block; blockId given → start that block (or pause it if it's the one running).
+ * Returns {done:'paused'|'resumed'|'started'|'none', name, step}
+ */
+function blockAction(blockId = '') {
+  const v = requireVault('personal');
+  const a = trkActive(v);
+  const names = () => {
+    const now = trkActive(v);
+    const b = now && liveBlock(v, now.blockId);
+    const s = now && now.subId && liveSub(v, now.subId);
+    return { name: b ? b.name : '', step: s ? s.text : '' };
+  };
+  if (blockId && !(a && a.blockId === blockId && a.sessionId)) {
+    if (!liveBlock(v, blockId)) throw new VaultError('NOT_FOUND');
+    startBlock({ blockId });
+    return { done: 'started', ...names() };
+  }
+  if (a && a.sessionId) { const n = names(); pauseBlock(); return { done: 'paused', ...n }; }
+  if (a && a.blockId && liveBlock(v, a.blockId)) { resumeBlock(); return { done: 'resumed', ...names() }; }
+  return { done: 'none', name: '', step: '' };
+}
+
+function blockToggleWithToast(blockId = '') {
+  let r;
+  try {
+    r = blockAction(blockId);
+  } catch (e) {
+    showToast({ kind: 'block', quiet: true, ttl: 3500, title: e.code === 'LOCKED' ? '🔒 הסרגל נעול' : 'לא הצלחתי', body: e.code === 'LOCKED' ? 'פותחים את הסרגל עם הסיסמה ואז אפשר להשהות ולהמשיך' : '' });
+    return null;
+  }
+  const label = r.name ? `${r.name}${r.step ? ` › ${r.step}` : ''}` : '';
+  const t = {
+    paused: ['⏸ הושהה', label],
+    resumed: ['▶ ממשיך', label],
+    started: ['▶ התחלת', label],
+    none: ['אין בלוק פתוח', 'מתחילים בלוק מהפאנל הוורוד (TIME BLOCKS)'],
+  }[r.done];
+  showToast({ kind: 'block', quiet: true, ttl: 2600, title: t[0], body: t[1] });
+  return r;
 }
 
 function addBlock({ name }) {
@@ -1461,6 +1512,7 @@ async function runLauncher({ id }) {
     if (l.type === 'web') { await launcher.openWeb(l.url, l.profile); return { done: 'opened' }; }
     if (l.type === 'app') { const r = await launcher.openApp(l); return { done: r.fallback ? 'fallback' : 'opened' }; }
     if (l.type === 'path') { await launcher.openPath(l.target); return { done: 'opened' }; }
+    if (l.type === 'block') { blockToggleWithToast(l.target || ''); return { done: 'block' }; }
     const f = findField(l.itemId, l.fieldId);
     if (!f) throw new VaultError('NOT_FOUND');
     copyText(f.value, f.kind === 'secret');
@@ -1738,7 +1790,7 @@ async function boot() {
   if (process.env.SARGEL_SHOTS) {
     // development only: scripted screenshots of every screen
     require('./devshots')({
-      app, state, tstate, tracker: () => tracker, vaults, setExpanded, trk: { startBlock, toggleSub, addSub }, createVault, openVault, unlockPersonal, lockAll, showSearch, showKeys, broadcast,
+      app, state, tstate, tracker: () => tracker, vaults, setExpanded, trk: { startBlock, toggleSub, addSub, blockToggleWithToast, saveLauncher, runLauncher }, createVault, openVault, unlockPersonal, lockAll, showSearch, showKeys, broadcast,
       sidebar: () => sidebar, search: () => searchWin, keys: () => keysWin,
       quick: () => quickWin, toastWin: () => toastWin, showQuick, showToast, activity: () => activity,
     });

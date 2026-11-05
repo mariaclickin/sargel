@@ -11,6 +11,7 @@ const DEFAULTS = {
   hotkey: 'CommandOrControl+Shift+Space',
   launcherHotkey: 'CommandOrControl+Shift+K',
   quickNoteHotkey: 'CommandOrControl+Shift+Y', // Ctrl+Shift+N is Chrome's incognito window
+  blockHotkey: 'CommandOrControl+Shift+P', // pause / resume the current TIME BLOCK
   // workday + reminders
   workStart: '09:00',
   workEnd: '17:00',

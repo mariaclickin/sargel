@@ -116,7 +116,7 @@ const COLORS = {
 const ITEM_ICONS = ['text', 'mail', 'send', 'file', 'edit', 'checklist', 'phone', 'chat', 'user', 'users', 'idcard', 'key', 'lock', 'link',
   'globe', 'star', 'flag', 'bolt', 'calendar', 'clock', 'briefcase', 'cash', 'tag', 'home', 'heart', 'mappin', 'folder', 'sparkle'];
 const LAUNCH_ICONS = ['chrome', 'globe', 'mail', 'sparkle', 'chat', 'apps', 'folder', 'file', 'copy', 'user', 'users', 'briefcase',
-  'calendar', 'checklist', 'phone', 'star', 'bolt', 'heart', 'home', 'cash', 'key', 'link', 'send', 'play'];
+  'calendar', 'checklist', 'phone', 'star', 'bolt', 'heart', 'home', 'cash', 'key', 'link', 'send', 'play', 'pause', 'clock'];
 
 /** inline style for a colored icon tile */
 function tileStyle(color) {
@@ -178,7 +178,7 @@ const ERRORS = {
   LAUNCH_FAILED: 'לא הצלחתי לפתוח',
 };
 
-const LAUNCH_DONE = { opened: 'נפתח', fallback: 'התוכנה לא מותקנת — נפתח באתר', copied: 'הועתק' };
+const LAUNCH_DONE = { opened: 'נפתח', fallback: 'התוכנה לא מותקנת — נפתח באתר', copied: 'הועתק', block: '' };
 const errText = (r) => ERRORS[r && r.code] || (r && r.message) || 'משהו השתבש';
 
 /* recently copied — shared between the windows through localStorage */

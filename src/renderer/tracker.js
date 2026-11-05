@@ -401,7 +401,7 @@ function renderBlocks() {
           <div class="blk-names"><b dir="auto">${esc(activeBlock.name)}</b>${activeSub ? `<span dir="auto">› ${esc(activeSub.text)}</span>` : ''}</div>
           <span id="run-clock" class="blk-clock" title="היום">${hms(runningTodayMs(a))}</span>
         </div>
-        <div class="muted small">סה״כ בבלוק: ${hm(total(activeBlock.id))}</div>
+        <div class="muted small">סה״כ בבלוק: ${hm(total(activeBlock.id))}${S.blockHotkeyLabel ? ` · השהיה/המשך מכל מקום: <kbd>${esc(S.blockHotkeyLabel)}</kbd>` : ''}</div>
         <div class="btns">
           ${a.sessionId
             ? `<button class="ghost sm" data-a="blk-pause">${icon('pause')} השהיה</button>`

@@ -99,6 +99,23 @@ module.exports = async function devShots(ctx) {
     await wait(400);
     await snap(tr, '04-checklist');
 
+    // hotkey: pause → resume
+    const isRunning = () => !!(vb.tstate.find((x) => x.id === 'active') || {}).sessionId;
+    const r1 = ctx.trk.blockToggleWithToast();
+    await wait(500);
+    await snap(ctx.toastWin(), '05-toast-paused');
+    const r2 = ctx.trk.blockToggleWithToast();
+    log(`hotkey: ${r1.done} → running=${isRunning() === true ? 'after resume yes' : 'no'}; second: ${r2.done}`);
+    // a keyboard button that starts a specific block (here: "קורס עיצוב"), then the same button pauses it
+    const course = vb.tblocks.find((b) => b.name === 'קורס עיצוב');
+    const { id: lid } = ctx.trk.saveLauncher({ launcher: { key: 'M', title: 'קורס', type: 'block', target: course.id, icon: 'play', color: 'pink' } });
+    await ctx.trk.runLauncher({ id: lid });
+    const a1 = vb.tstate.find((x) => x.id === 'active');
+    log(`launcher M: running block = ${(vb.tblocks.find((b) => b.id === a1.blockId) || {}).name}, running=${isRunning()}`);
+    await ctx.trk.runLauncher({ id: lid });
+    log(`launcher M again: running=${isRunning()}`);
+    await wait(300);
+
     ctx.tstate.pinned = false;
     ctx.setExpanded(true, { explicit: true }, 'sidebar');
     await wait(400);

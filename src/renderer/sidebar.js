@@ -624,6 +624,7 @@ async function runLaunch(id, el) {
   const r = await api.call('launch:run', { id });
   if (!r.ok) { toast(r.code === 'NOT_FOUND' ? 'הקובץ או התיקייה לא נמצאו' : errText(r), 'warn'); return; }
   flash(el);
+  if (r.done === 'block') return; // the corner popup already says paused / resumed
   toast(r.done === 'copied' && r.secret ? 'הסיסמה הועתקה · תימחק מהלוח בעוד 30 שניות' : LAUNCH_DONE[r.done] || 'בוצע');
 }
 
@@ -1094,7 +1095,7 @@ function bindLook(m, draft, icons, allowNone) {
 }
 
 /* quick-launch button editor */
-const LAUNCH_KINDS = [['web', 'globe', 'אתר / כרום'], ['app', 'apps', 'תוכנה'], ['path', 'folder', 'תיקייה / קובץ'], ['copy', 'copy', 'העתקת פריט']];
+const LAUNCH_KINDS = [['web', 'globe', 'אתר / כרום'], ['app', 'apps', 'תוכנה'], ['path', 'folder', 'תיקייה / קובץ'], ['copy', 'copy', 'העתקת פריט'], ['block', 'clock', 'TIME BLOCK']];
 
 async function openLauncherEditor(l, presetKey) {
   const isNew = !l;
@@ -1184,6 +1185,15 @@ async function openLauncherEditor(l, presetKey) {
         };
         $('.l-pickdir', body).onclick = () => pick('folder');
         $('.l-pickfile', body).onclick = () => pick('file');
+      } else if (draft.type === 'block') {
+        const blocks = ((S.data.tracker && S.data.tracker.blocks) || []).filter((b) => !b.done);
+        body.innerHTML = `
+          <label class="lbl">מה הכפתור עושה?<select class="l-block">
+            <option value="">השהיה / המשך של הבלוק הנוכחי</option>
+            ${blocks.map((b) => `<option value="${esc(b.id)}">התחלת הבלוק: ${esc(b.name)}</option>`).join('')}
+          </select></label>
+          <p class="muted small">בלוקים מגדירים בפאנל הוורוד (TIME BLOCKS). ${esc(S.blockHotkeyLabel ? `יש גם קיצור קבוע מכל מקום: ${S.blockHotkeyLabel}` : '')}</p>`;
+        $('.l-block', body).value = draft.target || '';
       } else {
         const tabsMap = new Map(S.data.tabs.map((t) => [t.id, t]));
         const opts = [];
@@ -1205,7 +1215,8 @@ async function openLauncherEditor(l, presetKey) {
       if (!b || b.dataset.v === draft.type) return;
       draft.type = b.dataset.v;
       draft.target = '';
-      draft.icon = { web: draft.profile ? 'chrome' : 'globe', app: 'apps', path: 'folder', copy: 'copy' }[draft.type];
+      draft.icon = { web: draft.profile ? 'chrome' : 'globe', app: 'apps', path: 'folder', copy: 'copy', block: 'pause' }[draft.type];
+      if (draft.type === 'block') draft.color = 'pink';
       bindLook(m, draft, LAUNCH_ICONS, false);
       drawType();
     };
@@ -1228,6 +1239,13 @@ async function openLauncherEditor(l, presetKey) {
       } else if (draft.type === 'path') {
         if (!draft.target) return 'צריך לבחור תיקייה או קובץ';
         if (!draft.title) draft.title = draft.target.split(/[\\/]/).filter(Boolean).pop();
+      } else if (draft.type === 'block') {
+        draft.target = $('.l-block', m).value;
+        if (!draft.title) {
+          const b = draft.target && ((S.data.tracker && S.data.tracker.blocks) || []).find((x) => x.id === draft.target);
+          draft.title = b ? b.name.slice(0, 20) : 'השהיה/המשך';
+        }
+        if (draft.target && draft.icon === 'pause') draft.icon = 'play';
       } else {
         const v = ($('.l-item', m) || {}).value;
         if (!v) return 'אין עדיין פריטים להעתקה';
@@ -1456,6 +1474,8 @@ function openSettings() {
       <div class="set-row"><span>מקלדת קיצורים</span><input class="hotkey" data-k="launcherHotkey" readonly title="לוחצים כאן ואז על צירוף המקשים הרצוי"></div>
       ${S.launcherHotkeyOk ? '' : `<p class="warn small">${icon('warn')}<span>קיצור המקלדת תפוס — כדאי לבחור צירוף אחר.</span></p>`}
       <div class="set-row"><span>פתק מהיר</span><input class="hotkey" data-k="quickNoteHotkey" readonly title="לוחצים כאן ואז על צירוף המקשים הרצוי"></div>
+      <div class="set-row"><span>TIME BLOCK: השהיה / המשך</span><input class="hotkey" data-k="blockHotkey" readonly title="לוחצים כאן ואז על צירוף המקשים הרצוי"></div>
+      ${S.blockHotkeyOk ? '' : `<p class="warn small">${icon('warn')}<span>קיצור ה-TIME BLOCK תפוס — כדאי לבחור צירוף אחר.</span></p>`}
       ${S.quickHotkeyOk ? '' : `<p class="warn small">${icon('warn')}<span>קיצור הפתק המהיר תפוס — כדאי לבחור צירוף אחר.</span></p>`}
       <p class="muted small">לוחצים על השדה ואז על הצירוף החדש (למשל Ctrl+Shift+K).</p>
     </div>
@@ -1571,7 +1591,7 @@ function openSettings() {
 
     $$('.hotkey', m).forEach((hk) => {
       const k = hk.dataset.k;
-      const label = () => ({ hotkey: S.hotkeyLabel, launcherHotkey: S.launcherHotkeyLabel, quickNoteHotkey: S.quickHotkeyLabel }[k]) || '—';
+      const label = () => ({ hotkey: S.hotkeyLabel, launcherHotkey: S.launcherHotkeyLabel, quickNoteHotkey: S.quickHotkeyLabel, blockHotkey: S.blockHotkeyLabel }[k]) || '—';
       hk.value = label();
       hk.addEventListener('focus', () => { hk.value = 'לחצו על הצירוף…'; });
       hk.addEventListener('blur', () => { hk.value = label(); });
@@ -1584,7 +1604,7 @@ function openSettings() {
         const r = await api.call('state:get');
         S = r.state;
         hk.blur();
-        const ok = { hotkey: S.hotkeyOk, launcherHotkey: S.launcherHotkeyOk, quickNoteHotkey: S.quickHotkeyOk }[k];
+        const ok = { hotkey: S.hotkeyOk, launcherHotkey: S.launcherHotkeyOk, quickNoteHotkey: S.quickHotkeyOk, blockHotkey: S.blockHotkeyOk }[k];
         toast(ok ? `הקיצור עודכן: ${label()}` : 'הקיצור תפוס — נסו צירוף אחר', ok ? 'ok' : 'warn');
       });
     });

@@ -9,10 +9,10 @@ api.on('toast:show', (p) => {
     <div class="ntf-title">${esc(p.title)}</div>
     <div class="ntf-body">${esc(p.body)}</div>
     ${p.water && p.waterText ? `<div class="ntf-body">${esc(p.waterText)}</div>` : ''}
-    <div class="ntf-actions">
+    ${p.quiet ? '' : `<div class="ntf-actions">
       ${p.water ? `<button class="primary sm" data-a="water">${icon('droplet')} שתיתי</button>` : ''}
       <button class="ghost sm" data-a="close">${p.water ? 'אחר כך' : 'סגירה'}</button>
-    </div>`;
+    </div>`}`;
   void n.offsetWidth;
   n.classList.add('in');
 });
