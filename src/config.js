@@ -21,6 +21,7 @@ const DEFAULTS = {
   waterReminder: true,
   waterMinutes: 60,
   waterGoal: 8,
+  trackerEnabled: true, // the green "tracker" handle
   autoLockMinutes: 15, // 0 = never
   launchAtLogin: true,
   theme: 'system', // 'system' | 'light' | 'dark'

@@ -38,14 +38,25 @@ let screenLocked = false;
 let clipTimer = null;
 let saveChain = Promise.resolve();
 
-const state = {
-  expanded: false,
-  pinned: false,
-  hold: false,
-  explicitOpen: false,
-  insideSince: 0,
-  outsideSince: 0,
-};
+const mkState = () => ({ expanded: false, pinned: false, hold: false, explicitOpen: false, insideSince: 0, outsideSince: 0 });
+const state = mkState(); // purple sidebar
+const tstate = mkState(); // green tracker panel
+let tracker = null;
+
+/** the two edge drawers that share the hover / slide-out behaviour */
+function drawers() {
+  return [
+    { kind: 'sidebar', win: sidebar, st: state },
+    { kind: 'tracker', win: tracker, st: tstate },
+  ];
+}
+const drawerByKind = (kind) => drawers().find((d) => d.kind === kind);
+const anyExpanded = () => drawers().some((d) => d.st.expanded);
+function reshowDrawers() {
+  if (sidebar) sidebar.showInactive();
+  if (tracker && cfg.get('trackerEnabled') !== false) tracker.showInactive();
+}
+const drawerBySender = (sender) => drawers().find((d) => d.win && !d.win.isDestroyed() && d.win.webContents === sender) || drawers()[0];
 const vaults = { personal: null, team: null };
 
 const uid = () => crypto.randomUUID();
@@ -58,9 +69,20 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(boot);
 }
 
+/** pause a running TIME BLOCK right now (app closing / computer sleeping), writing synchronously */
+function pauseBlockNow() {
+  const v = vaults.personal;
+  if (v && v.unlocked) {
+    try { if (endRunning(v)) v._write(v.data); } catch { /* ignore */ }
+  } else {
+    pendingStopAt = Date.now();
+  }
+}
+
 app.on('before-quit', () => {
   quitting = true;
-  try { syncActivityToVault(); if (activity) activity.save(); } catch { /* ignore */ }
+  pauseBlockNow();
+  try { syncActivityToVault(); if (activity) { activity.s.lastAlive = Date.now(); activity.dirty = true; activity.save(); } } catch { /* ignore */ }
 });
 app.on('will-quit', () => globalShortcut.unregisterAll());
 app.on('window-all-closed', () => { /* tray app — keep running */ });
@@ -70,9 +92,13 @@ function workArea() {
   return screen.getPrimaryDisplay().workArea;
 }
 
-function collapsedBounds() {
+function collapsedBounds(kind = 'sidebar') {
   const wa = workArea();
-  const y = Math.round(wa.y + (wa.height - HANDLE.h) * clamp(cfg.get('handleY'), 0, 1));
+  let y = Math.round(wa.y + (wa.height - HANDLE.h) * clamp(cfg.get('handleY'), 0, 1));
+  if (kind === 'tracker') {
+    // right below the sidebar handle; above it if there's no room
+    y = y + HANDLE.h + 10 + HANDLE.h <= wa.y + wa.height ? y + HANDLE.h + 10 : y - HANDLE.h - 10;
+  }
   const x = cfg.get('side') === 'left' ? wa.x : wa.x + wa.width - HANDLE.w;
   return { x, y, width: HANDLE.w, height: HANDLE.h };
 }
@@ -90,8 +116,27 @@ function clamp(v, a, b) {
 }
 
 function reposition() {
-  if (!sidebar || sidebar.isDestroyed()) return;
-  sidebar.setBounds(state.expanded ? expandedBounds() : collapsedBounds());
+  for (const d of drawers()) {
+    if (!d.win || d.win.isDestroyed()) continue;
+    d.win.setBounds(d.st.expanded ? expandedBounds() : collapsedBounds(d.kind));
+  }
+}
+
+function createTracker() {
+  tracker = new BrowserWindow({
+    ...collapsedBounds('tracker'),
+    frame: false, transparent: true, resizable: false, movable: false, minimizable: false, maximizable: false,
+    fullscreenable: false, skipTaskbar: true, alwaysOnTop: true, hasShadow: false, show: false, acceptFirstMouse: true,
+    backgroundColor: '#00000000', title: 'הסרגל — המעקב', webPreferences,
+  });
+  tracker.setAlwaysOnTop(true, 'floating');
+  if (isMac) tracker.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  tracker.loadFile(path.join(RENDERER, 'tracker.html'));
+  tracker.once('ready-to-show', () => { if (cfg.get('trackerEnabled') !== false) tracker.showInactive(); });
+  tracker.on('close', (e) => { if (!quitting) e.preventDefault(); });
+  tracker.on('blur', () => { if (!tstate.pinned) tstate.explicitOpen = false; });
+  tracker.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  tracker.webContents.on('will-navigate', (e) => e.preventDefault());
 }
 
 // ───────────────────────── windows ─────────────────────────
@@ -205,9 +250,9 @@ function showKeys() {
 function hideKeys() {
   if (!keysWin || !keysWin.isVisible()) return;
   keysWin.hide();
-  if (isMac && !state.expanded) {
+  if (isMac && !anyExpanded()) {
     app.hide();
-    setTimeout(() => sidebar && sidebar.showInactive(), 80);
+    setTimeout(reshowDrawers, 80);
   }
 }
 
@@ -247,9 +292,9 @@ function showQuick() {
 function hideQuick() {
   if (!quickWin || !quickWin.isVisible()) return;
   quickWin.hide();
-  if (isMac && !state.expanded) {
+  if (isMac && !anyExpanded()) {
     app.hide();
-    setTimeout(() => sidebar && sidebar.showInactive(), 80);
+    setTimeout(reshowDrawers, 80);
   }
 }
 
@@ -280,54 +325,66 @@ function showToast(payload) {
   toastTimer = setTimeout(() => toastWin && toastWin.hide(), 30000);
 }
 
-function setExpanded(v, opts = {}) {
-  if (!sidebar || sidebar.isDestroyed()) return;
-  state.insideSince = 0;
-  state.outsideSince = 0;
-  if (v && opts.explicit) state.explicitOpen = true;
-  if (state.expanded === v) {
-    if (v && opts.focus) sidebar.focus();
+function setExpanded(v, opts = {}, kind = 'sidebar') {
+  const d = drawerByKind(kind);
+  const { win, st } = d;
+  if (!win || win.isDestroyed()) return;
+  st.insideSince = 0;
+  st.outsideSince = 0;
+  if (v && opts.explicit) st.explicitOpen = true;
+  if (st.expanded === v) {
+    if (v && opts.focus) win.focus();
     return;
   }
-  state.expanded = v;
   if (v) {
-    sidebar.setBounds(expandedBounds());
-    sidebar.webContents.send('ui:expanded', true);
-    if (opts.focus) sidebar.focus();
+    // only one panel open at a time
+    for (const o of drawers()) {
+      if (o.kind !== kind && o.st.expanded) { o.st.pinned = false; setExpanded(false, {}, o.kind); }
+    }
+  }
+  st.expanded = v;
+  if (v) {
+    win.setBounds(expandedBounds());
+    win.moveTop();
+    win.webContents.send('ui:expanded', true);
+    if (opts.focus) win.focus();
   } else {
-    sidebar.webContents.send('ui:expanded', false);
-    if (sidebar.isFocused()) sidebar.blur();
-    sidebar.setBounds(collapsedBounds());
+    win.webContents.send('ui:expanded', false);
+    if (win.isFocused()) win.blur();
+    win.setBounds(collapsedBounds(kind));
   }
 }
 
-/** Poll the cursor: hover the handle → open; leave the panel → close. Works the same on Windows and Mac. */
+/** Poll the cursor: hover a handle → open; leave the panel → close. Works the same on Windows and Mac. */
 function tick() {
-  if (!sidebar || sidebar.isDestroyed() || !sidebar.isVisible()) return;
   const p = screen.getCursorScreenPoint();
-  const b = sidebar.getBounds();
-  const inside = p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height;
   const now = Date.now();
-  if (!state.expanded) {
-    if (inside) {
-      if (!state.insideSince) state.insideSince = now;
-      if (now - state.insideSince >= 160) setExpanded(true);
-    } else {
-      state.insideSince = 0;
+  const list = drawers().filter((d) => d.win && !d.win.isDestroyed() && d.win.isVisible());
+  const within = (b) => p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height;
+  const overOpen = list.some((d) => d.st.expanded && within(d.win.getBounds()));
+  for (const { kind, win, st } of list) {
+    const inside = within(win.getBounds());
+    if (!st.expanded) {
+      if (inside && !overOpen) {
+        if (!st.insideSince) st.insideSince = now;
+        if (now - st.insideSince >= 160) setExpanded(true, {}, kind);
+      } else {
+        st.insideSince = 0;
+      }
+      continue;
     }
-    return;
+    if (inside) {
+      st.outsideSince = 0;
+      st.explicitOpen = false;
+      continue;
+    }
+    if (st.pinned || st.hold || st.explicitOpen) {
+      st.outsideSince = 0;
+      continue;
+    }
+    if (!st.outsideSince) st.outsideSince = now;
+    if (now - st.outsideSince >= 650) setExpanded(false, {}, kind);
   }
-  if (inside) {
-    state.outsideSince = 0;
-    state.explicitOpen = false;
-    return;
-  }
-  if (state.pinned || state.hold || state.explicitOpen) {
-    state.outsideSince = 0;
-    return;
-  }
-  if (!state.outsideSince) state.outsideSince = now;
-  if (now - state.outsideSince >= 650) setExpanded(false);
 }
 
 function showSearch() {
@@ -344,10 +401,10 @@ function showSearch() {
 function hideSearch() {
   if (!searchWin || !searchWin.isVisible()) return;
   searchWin.hide();
-  if (isMac && !state.expanded) {
+  if (isMac && !anyExpanded()) {
     // hand focus back to the app the user was in
     app.hide();
-    setTimeout(() => sidebar && sidebar.showInactive(), 80);
+    setTimeout(reshowDrawers, 80);
   }
 }
 
@@ -373,6 +430,7 @@ function rebuildTrayMenu() {
   const hk = prettyHotkey(cfg.get('hotkey'));
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'פתיחת הסרגל', click: () => setExpanded(true, { explicit: true, focus: true }) },
+    { label: 'פתיחת המעקב', click: () => { if (cfg.get('trackerEnabled') === false) applyConfig({ trackerEnabled: true }); setExpanded(true, { explicit: true, focus: true }, 'tracker'); } },
     { label: `חיפוש מהיר${hk ? `   (${hk})` : ''}`, click: () => showSearch() },
     { label: `מקלדת קיצורים${cfg.get('launcherHotkey') ? `   (${prettyHotkey(cfg.get('launcherHotkey'))})` : ''}`, click: () => showKeys() },
     { label: `פתק מהיר${cfg.get('quickNoteHotkey') ? `   (${prettyHotkey(cfg.get('quickNoteHotkey'))})` : ''}`, click: () => showQuick() },
@@ -436,7 +494,7 @@ function applyConfig(patch) {
   if (hm.test(patch.workStart || '')) clean.workStart = patch.workStart;
   if (hm.test(patch.workEnd || '')) clean.workEnd = patch.workEnd;
   if (Array.isArray(patch.workDays)) clean.workDays = [...new Set(patch.workDays.map(Number).filter((d) => d >= 0 && d <= 6))].sort();
-  for (const k of ['trackEnabled', 'hourlyNotify', 'waterReminder']) if (k in patch) clean[k] = !!patch[k];
+  for (const k of ['trackEnabled', 'hourlyNotify', 'waterReminder', 'trackerEnabled']) if (k in patch) clean[k] = !!patch[k];
   if ('breakMinutes' in patch) clean.breakMinutes = Math.round(clamp(patch.breakMinutes, 3, 60));
   if ('waterMinutes' in patch) clean.waterMinutes = Math.round(clamp(patch.waterMinutes, 15, 240));
   if ('waterGoal' in patch) clean.waterGoal = Math.round(clamp(patch.waterGoal, 1, 20));
@@ -447,6 +505,10 @@ function applyConfig(patch) {
   if ('hotkey' in clean || 'launcherHotkey' in clean || 'quickNoteHotkey' in clean) registerHotkey();
   if ('launchAtLogin' in clean) applyLogin();
   if ('theme' in clean) nativeTheme.themeSource = clean.theme;
+  if ('trackerEnabled' in clean && tracker) {
+    if (clean.trackerEnabled) tracker.showInactive();
+    else { setExpanded(false, {}, 'tracker'); tracker.hide(); }
+  }
   if ('side' in clean || 'handleY' in clean || 'width' in clean) reposition();
   rebuildTrayMenu();
   broadcast();
@@ -477,6 +539,12 @@ function publicState() {
     ? p.data.launchers.filter((l) => !l.deleted).sort((a, b) => (a.order || 0) - (b.order || 0))
     : [];
   data.notes = p && p.unlocked ? p.data.notes.filter((n) => !n.deleted) : [];
+  data.tracker = p && p.unlocked ? {
+    sessions: p.data.sessions.filter((x) => !x.deleted),
+    checks: p.data.tchecks.filter((x) => !x.deleted),
+    jobs: p.data.jobs.filter((x) => !x.deleted),
+    active: trkActive(p),
+  } : null;
   return {
     platform: process.platform,
     version: app.getVersion(),
@@ -490,13 +558,13 @@ function publicState() {
     vaults: { personal: info('personal'), team: info('team') },
     rememberTeam: !!(p && p.unlocked && p.data.settings.teamPassword),
     data,
-    ui: { expanded: state.expanded, pinned: state.pinned },
+    ui: { expanded: state.expanded, pinned: state.pinned, trackerExpanded: tstate.expanded, trackerPinned: tstate.pinned },
   };
 }
 
 function broadcast() {
   const s = publicState();
-  for (const w of [sidebar, searchWin, keysWin, quickWin]) {
+  for (const w of [sidebar, tracker, searchWin, keysWin, quickWin]) {
     if (w && !w.isDestroyed()) w.webContents.send('state', s);
   }
 }
@@ -701,7 +769,7 @@ async function attachVault(which, v, password, remember) {
   watch(which);
   backupDaily(which);
   if (which === 'team') await setRememberedTeamPassword(remember ? password : null);
-  else { await migratePersonal(); await autoUnlockTeam(); syncActivityToVault(); }
+  else { await migratePersonal(); await autoUnlockTeam(); syncActivityToVault(); fixRunning(); carryChecks(); }
   broadcast();
 }
 
@@ -731,6 +799,8 @@ async function unlockPersonal(password) {
   await migratePersonal();
   await autoUnlockTeam();
   syncActivityToVault();
+  fixRunning();
+  carryChecks();
   broadcast();
 }
 
@@ -908,12 +978,167 @@ function deleteNote({ id }) {
   queueSave('personal');
 }
 
+/* ───────── tracker panel: TIME BLOCKS, daily checklist, jobs & leads ───────── */
+const bootAt = Date.now();
+let prevAlive = 0; // last time the previous run of the app was alive
+let pendingStopAt = 0; // computer went to sleep while the vault was locked
+
+function trkActive(v) {
+  return v.data.tstate.find((x) => x.id === 'active' && !x.deleted) || null;
+}
+
+function setActive(v, patch) {
+  const i = v.data.tstate.findIndex((x) => x.id === 'active');
+  const doc = { id: 'active', name: '', sessionId: '', ...(i >= 0 && !v.data.tstate[i].deleted ? v.data.tstate[i] : {}), ...patch, updatedAt: Date.now() };
+  if (i >= 0) v.data.tstate[i] = doc; else v.data.tstate.push(doc);
+}
+
+function endRunning(v, at = Date.now()) {
+  const a = trkActive(v);
+  if (!a || !a.sessionId) return false;
+  const s = v.data.sessions.find((x) => x.id === a.sessionId);
+  if (s && !s.end) { s.end = Math.max(s.start, at); s.updatedAt = Date.now(); }
+  setActive(v, { sessionId: '' });
+  return true;
+}
+
+function startBlock({ name }) {
+  const v = requireVault('personal');
+  const n = str(name, 80).trim();
+  if (!n) throw new VaultError('BAD_INPUT');
+  endRunning(v);
+  const now = Date.now();
+  const s = { id: uid(), name: n, start: now, end: 0, machine: activity ? activity.machine : '', updatedAt: now };
+  v.data.sessions.push(s);
+  setActive(v, { name: n, sessionId: s.id });
+  queueSave('personal');
+}
+
+function pauseBlock() {
+  const v = requireVault('personal');
+  if (endRunning(v)) queueSave('personal');
+}
+
+function resumeBlock() {
+  const v = requireVault('personal');
+  const a = trkActive(v);
+  if (a && a.name && !a.sessionId) startBlock({ name: a.name });
+}
+
+function stopBlock() {
+  const v = requireVault('personal');
+  endRunning(v);
+  setActive(v, { name: '', sessionId: '' });
+  queueSave('personal');
+}
+
+function deleteSessionsByName({ name, date }) {
+  const v = requireVault('personal');
+  const now = Date.now();
+  const a = trkActive(v);
+  v.data.sessions = v.data.sessions.map((s) => {
+    if (s.deleted || s.name !== name || (date && dateKey(new Date(s.start)) !== date)) return s;
+    if (a && a.sessionId === s.id) setActive(v, { name: '', sessionId: '' });
+    return { id: s.id, deleted: true, updatedAt: now };
+  });
+  queueSave('personal');
+}
+
+/** a block left running when the app closed / the computer slept is paused at that moment */
+function fixRunning() {
+  const v = vaults.personal;
+  if (!v || !v.unlocked || !activity) return;
+  const a = trkActive(v);
+  if (!a || !a.sessionId) { pendingStopAt = 0; return; }
+  const s = v.data.sessions.find((x) => x.id === a.sessionId);
+  if (!s || s.end) { setActive(v, { sessionId: '' }); queueSave('personal'); return; }
+  if (s.machine && s.machine !== activity.machine) return; // running on another computer
+  let stopAt = 0;
+  if (s.start < bootAt) stopAt = Math.max(s.start, prevAlive || s.start);
+  if (pendingStopAt && pendingStopAt > s.start) stopAt = stopAt ? Math.min(stopAt, pendingStopAt) : pendingStopAt;
+  pendingStopAt = 0;
+  if (stopAt) { endRunning(v, stopAt); queueSave('personal'); }
+}
+
+function addCheck({ text }) {
+  const v = requireVault('personal');
+  const t = str(text, 300).trim();
+  if (!t) throw new VaultError('BAD_INPUT');
+  const now = Date.now();
+  v.data.tchecks.push({ id: uid(), text: t, done: false, doneAt: 0, date: dateKey(), carried: false, order: nextOrder(v.data.tchecks.filter((c) => !c.deleted)), updatedAt: now });
+  queueSave('personal');
+}
+
+function toggleCheck({ id }) {
+  const v = requireVault('personal');
+  const c = v.data.tchecks.find((x) => x.id === id && !x.deleted);
+  if (!c) throw new VaultError('NOT_FOUND');
+  c.done = !c.done;
+  c.doneAt = c.done ? Date.now() : 0;
+  c.updatedAt = Date.now();
+  queueSave('personal');
+}
+
+function deleteCheck({ id }) {
+  const v = requireVault('personal');
+  const now = Date.now();
+  v.data.tchecks = v.data.tchecks.map((x) => (x.id === id ? { id, deleted: true, updatedAt: now } : x));
+  queueSave('personal');
+}
+
+/** unfinished checklist items from earlier days move to today */
+function carryChecks() {
+  const v = vaults.personal;
+  if (!v || !v.unlocked) return;
+  const today = dateKey();
+  const now = Date.now();
+  let moved = false;
+  for (const c of v.data.tchecks) {
+    if (c.deleted || c.done || !c.date || c.date >= today) continue;
+    c.date = today;
+    c.carried = true;
+    c.updatedAt = now;
+    moved = true;
+  }
+  if (moved) queueSave('personal');
+}
+
+const JOB_KINDS = new Set(['job', 'lead']);
+function saveJob({ job: j }) {
+  const v = requireVault('personal');
+  if (!j || typeof j !== 'object') throw new VaultError('BAD_INPUT');
+  const now = Date.now();
+  const id = typeof j.id === 'string' && j.id ? j.id.slice(0, 64) : uid();
+  const clean = {
+    id,
+    title: str(j.title, 200).trim() || 'ללא שם',
+    kind: JOB_KINDS.has(j.kind) ? j.kind : 'job',
+    status: Math.round(clamp(j.status, 0, 3)),
+    due: /^\d{4}-\d{2}-\d{2}$/.test(j.due || '') ? j.due : '',
+    note: str(j.note, 5000),
+    updatedAt: now,
+  };
+  const i = v.data.jobs.findIndex((x) => x.id === id);
+  clean.createdAt = i >= 0 && v.data.jobs[i].createdAt ? v.data.jobs[i].createdAt : now;
+  if (i >= 0) v.data.jobs[i] = clean; else v.data.jobs.push(clean);
+  queueSave('personal');
+  return { id };
+}
+
+function deleteJob({ id }) {
+  const v = requireVault('personal');
+  const now = Date.now();
+  v.data.jobs = v.data.jobs.map((x) => (x.id === id ? { id, deleted: true, updatedAt: now } : x));
+  queueSave('personal');
+}
+
 /* ───────── activity tracking + reminders ───────── */
 const hm = (s) => { const [h, m] = String(s).split(':').map(Number); return h * 60 + m; };
 const fmtH = (min) => `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')}`;
 
 function activityTick() {
   if (!activity) return;
+  activity.s.lastAlive = Date.now();
   activity.sample({
     enabled: !!cfg.get('trackEnabled'),
     idleSec: powerMonitor.getSystemIdleTime(),
@@ -981,6 +1206,7 @@ function activitySummary() {
 
 function remindersTick() {
   if (!activity || !cfg) return;
+  carryChecks();
   const now = new Date();
   if (!(cfg.get('workDays') || []).includes(now.getDay())) return;
   const key = dateKey(now);
@@ -1139,7 +1365,7 @@ function openExternal(url) {
 // ───────────────────────── IPC ─────────────────────────
 function handle(channel, fn) {
   ipcMain.handle(channel, async (e, arg) => {
-    const ok = [sidebar, searchWin, keysWin, quickWin, toastWin].some((w) => w && !w.isDestroyed() && w.webContents === e.sender);
+    const ok = [sidebar, tracker, searchWin, keysWin, quickWin, toastWin].some((w) => w && !w.isDestroyed() && w.webContents === e.sender);
     if (!ok) return { ok: false, code: 'FORBIDDEN' };
     try {
       const r = await fn(arg || {}, e);
@@ -1153,10 +1379,10 @@ function handle(channel, fn) {
 function registerIpc() {
   handle('state:get', () => ({ state: publicState() }));
 
-  handle('ui:expand', ({ focus }) => setExpanded(true, { explicit: true, focus: !!focus }));
-  handle('ui:collapse', () => { state.explicitOpen = false; setExpanded(false); });
-  handle('ui:pin', ({ pinned }) => { state.pinned = !!pinned; broadcast(); });
-  handle('ui:hold', ({ hold }) => { state.hold = !!hold; });
+  handle('ui:expand', ({ focus }, e) => setExpanded(true, { explicit: true, focus: !!focus }, drawerBySender(e.sender).kind));
+  handle('ui:collapse', (_a, e) => { const d = drawerBySender(e.sender); d.st.explicitOpen = false; setExpanded(false, {}, d.kind); });
+  handle('ui:pin', ({ pinned }, e) => { drawerBySender(e.sender).st.pinned = !!pinned; broadcast(); });
+  handle('ui:hold', ({ hold }, e) => { drawerBySender(e.sender).st.hold = !!hold; });
 
   handle('vault:suggestFolders', () => ({ folders: suggestFolders() }));
   handle('vault:pickFolder', async (_a, e) => {
@@ -1243,6 +1469,18 @@ function registerIpc() {
   handle('notes:delete', (a) => deleteNote(a));
   handle('quick:hide', () => hideQuick());
   handle('quick:show', () => showQuick());
+
+  handle('ui:openSidebar', () => setExpanded(true, { explicit: true, focus: true }, 'sidebar'));
+  handle('trk:start', (a) => startBlock(a));
+  handle('trk:pause', () => pauseBlock());
+  handle('trk:resume', () => resumeBlock());
+  handle('trk:stop', () => stopBlock());
+  handle('trk:deleteBlock', (a) => deleteSessionsByName(a));
+  handle('trk:checkAdd', (a) => addCheck(a));
+  handle('trk:checkToggle', (a) => toggleCheck(a));
+  handle('trk:checkDelete', (a) => deleteCheck(a));
+  handle('trk:jobSave', (a) => saveJob(a));
+  handle('trk:jobDelete', (a) => deleteJob(a));
 
   handle('activity:get', () => ({ summary: activitySummary() }));
   handle('activity:water', ({ delta }) => {
@@ -1337,6 +1575,7 @@ async function boot() {
 
   registerIpc();
   createSidebar();
+  createTracker();
   createSearch();
   createKeys();
   createQuick();
@@ -1346,6 +1585,8 @@ async function boot() {
   applyLogin();
 
   activity = new Activity(path.join(app.getPath('userData'), 'activity.json'));
+  prevAlive = activity.s.lastAlive || 0;
+  sidebar.on('session-end', () => { pauseBlockNow(); activity.save(); }); // Windows shutdown / sign-out
   setInterval(tick, 80);
   setInterval(autoLockCheck, 15000);
   setInterval(() => { activityTick(); remindersTick(); }, 30000);
@@ -1354,7 +1595,7 @@ async function boot() {
   activityTick();
   powerMonitor.on('lock-screen', () => { screenLocked = true; activityTick(); lockAll(); });
   powerMonitor.on('unlock-screen', () => { screenLocked = false; });
-  powerMonitor.on('suspend', () => { activityTick(); activity.save(); lockAll(); });
+  powerMonitor.on('suspend', () => { activityTick(); activity.save(); pauseBlockNow(); lockAll(); });
   screen.on('display-metrics-changed', reposition);
   screen.on('display-added', reposition);
   screen.on('display-removed', reposition);
@@ -1364,7 +1605,7 @@ async function boot() {
   if (process.env.SARGEL_SHOTS) {
     // development only: scripted screenshots of every screen
     require('./devshots')({
-      app, state, vaults, setExpanded, createVault, openVault, unlockPersonal, lockAll, showSearch, showKeys, broadcast,
+      app, state, tstate, tracker: () => tracker, vaults, setExpanded, createVault, openVault, unlockPersonal, lockAll, showSearch, showKeys, broadcast,
       sidebar: () => sidebar, search: () => searchWin, keys: () => keysWin,
       quick: () => quickWin, toastWin: () => toastWin, showQuick, showToast, activity: () => activity,
     });

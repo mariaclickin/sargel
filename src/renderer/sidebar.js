@@ -1512,6 +1512,7 @@ function openSettings() {
     <div class="sec">
       <h4>כללי</h4>
       <label class="check"><input type="checkbox" class="s-login"><span>הפעלה אוטומטית כשהמחשב נדלק</span></label>
+      <label class="check"><input type="checkbox" class="s-tracker"><span>להציג את ידית "המעקב" (הוורודה) <small>חודש · צ'קליסט · TIME BLOCKS · עבודות</small></span></label>
       <div class="set-row"><span class="muted small">גרסה ${esc(S.version)}</span><button class="link-btn" data-s="quit">יציאה מהסרגל</button></div>
     </div>
 
@@ -1539,6 +1540,9 @@ function openSettings() {
     const lg = $('.s-login', m);
     lg.checked = !!c.launchAtLogin;
     lg.onchange = () => set({ launchAtLogin: lg.checked });
+    const tk = $('.s-tracker', m);
+    tk.checked = c.trackerEnabled !== false;
+    tk.onchange = () => set({ trackerEnabled: tk.checked });
 
     const ws = $('.s-ws', m);
     const we = $('.s-we', m);

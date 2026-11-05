@@ -73,7 +73,7 @@ function parseFile(text) {
 }
 
 /** record lists that sync between computers (per-record, newest wins) */
-const LISTS = ['tabs', 'items', 'launchers', 'notes', 'days'];
+const LISTS = ['tabs', 'items', 'launchers', 'notes', 'days', 'sessions', 'tchecks', 'jobs', 'tstate'];
 
 function emptyData() {
   const d = { schema: 1, settings: { updatedAt: 0 } };
