@@ -4,7 +4,44 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { Activity, combine, stats, dateKey } = require('../src/activity');
+const { Activity, combine, stats, focusStreak, workday, dateKey } = require('../src/activity');
+
+const lineOf = (parts) => {
+  const a = '.'.repeat(1440).split('');
+  for (const [from, to, ch] of parts) for (let i = from; i < to; i++) a[i] = ch;
+  return a.join('');
+};
+const H = (h, m = 0) => h * 60 + m;
+
+test('workday counts from arrival to leaving, breaks included; early arrival is overtime', () => {
+  const line = lineOf([[H(8, 30), H(12), 'w'], [H(12), H(12, 30), 'b'], [H(12, 30), H(17), 'w']]);
+  const d = workday(line, 10, { ws: H(9), we: H(17) });
+  assert.strictEqual(d.total, H(8, 30));
+  assert.strictEqual(d.early, 30);
+  assert.strictEqual(d.overtime, 30);
+  assert.strictEqual(d.breakMinutes, 30);
+});
+
+test('manual fix and vacation', () => {
+  const line = lineOf([[H(9), H(19, 40), 'w']]);
+  const fixed = workday(line, 10, { ws: H(9), we: H(17), fix: { type: 'work', arrive: '09:00', leave: '17:00', breaks: null } });
+  assert.strictEqual(fixed.total, H(8));
+  assert.strictEqual(fixed.overtime, 0);
+  // arriving early counts even if leaving early
+  const earlyShort = workday(lineOf([[H(8, 30), H(16, 30), 'w']]), 10, { ws: H(9), we: H(17) });
+  assert.strictEqual(earlyShort.total, H(8));
+  assert.strictEqual(earlyShort.overtime, 30);
+  const vac = workday('.'.repeat(1440), 10, { ws: H(9), we: H(17), fix: { type: 'vac' } });
+  assert.strictEqual(vac.total, H(8));
+  assert.strictEqual(vac.off, 'vac');
+});
+
+test('focus streak ignores short pauses and stops at a real break', () => {
+  const line = lineOf([[H(9), H(10), 'w'], [H(10), H(10, 5), 'b'], [H(10, 5), H(11), 'w'], [H(11), H(11, 30), 'b'], [H(11, 30), H(12), 'w']]);
+  const f = focusStreak(line, 10);
+  assert.strictEqual(f.len, 120);
+  assert.strictEqual(f.start, H(9));
+});
 
 const at = (h, m) => { const d = new Date(2026, 10, 4, h, m, 0); return d; };
 const fresh = () => new Activity(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sargel-act-')), 'a.json'));

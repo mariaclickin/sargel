@@ -140,4 +140,63 @@ function stats(line, breakMin) {
   return { active, breaks, breakMinutes: bmin, arrival: first, leave: last + 1, longest, longestAt };
 }
 
-module.exports = { Activity, combine, stats, dateKey, DAY };
+/** longest stretch of work where no pause reached the break threshold: {len, start, end} in minutes */
+function focusStreak(line, breakMin) {
+  let best = { len: 0, start: null, end: null };
+  let start = -1;
+  let lastW = -1;
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] !== 'w') continue;
+    if (start < 0 || i - lastW - 1 >= breakMin) start = i;
+    lastW = i;
+    const len = i + 1 - start;
+    if (len > best.len) best = { len, start, end: i + 1 };
+  }
+  return best;
+}
+
+/**
+ * The workday as she counts it: from arrival to leaving, breaks included, with optional manual fixes.
+ * fix = {type:'work'|'vac'|'sick', arrive:'HH:MM'|'', leave:'HH:MM'|'', breaks:number|null}
+ * Returns {total, arrival, leave, early, overtime, off, fixed, breakMinutes, breaks}
+ */
+function workday(line, breakMin, { ws, we, fix = null, nowMin = null } = {}) {
+  const target = we - ws;
+  if (fix && (fix.type === 'vac' || fix.type === 'sick')) {
+    return { total: target, arrival: null, leave: null, early: 0, overtime: 0, off: fix.type, fixed: true, breakMinutes: 0, breaks: 0 };
+  }
+  const st = stats(line, breakMin);
+  const hm = (s) => { if (!s) return null; const [h, m] = s.split(':').map(Number); return h * 60 + m; };
+  let arrival = st.arrival;
+  let leave = st.leave;
+  if (nowMin != null && leave != null && leave > nowMin) leave = nowMin;
+  const fa = fix ? hm(fix.arrive) : null;
+  const fl = fix ? hm(fix.leave) : null;
+  if (fa != null) arrival = fa;
+  if (fl != null) leave = fl;
+  if (arrival == null || leave == null || leave <= arrival) {
+    return { total: 0, arrival, leave, early: 0, overtime: 0, off: null, fixed: !!fix, breakMinutes: st.breakMinutes, breaks: st.breaks };
+  }
+  // minutes where tracking was switched off are not counted
+  let offMin = 0;
+  if (fa == null && fl == null) for (let i = arrival; i < leave; i++) if (line[i] === 'o') offMin++;
+  const total = leave - arrival - offMin;
+  const breakMinutes = fix && typeof fix.breaks === 'number' ? fix.breaks : st.breakMinutes;
+  // extra time = before the start time + after the end time
+  const early = Math.max(0, Math.min(ws, leave) - arrival);
+  const late = Math.max(0, leave - Math.max(we, arrival));
+  return {
+    total,
+    arrival,
+    leave,
+    early,
+    late,
+    overtime: early + late,
+    off: null,
+    fixed: !!fix,
+    breakMinutes,
+    breaks: fix && typeof fix.breaks === 'number' ? null : st.breaks,
+  };
+}
+
+module.exports = { Activity, combine, stats, focusStreak, workday, dateKey, DAY };

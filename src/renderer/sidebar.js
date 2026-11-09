@@ -318,6 +318,40 @@ function mountMain() {
     <div class="view hidden" id="v-day"><main id="day" class="list"></main></div>
     <footer class="foot" id="foot"><button class="primary" data-action="add-item">${icon('plus')} פריט חדש</button></footer>`;
 
+  // notes: drag a card onto another to move it (pinned and regular notes stay in their own group)
+  const nb = $('#notes');
+  let ndrag = null;
+  const noteById = (id) => S.data.notes.find((x) => x.id === id);
+  const clearNoteMarks = () => $$('.note.drop, .note.dragging', nb).forEach((x) => x.classList.remove('drop', 'dragging'));
+  nb.addEventListener('dragstart', (e) => {
+    const n = e.target.closest && e.target.closest('.note');
+    if (!n) return;
+    ndrag = n.dataset.nid;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', ndrag);
+    setTimeout(() => n.classList.add('dragging'), 0);
+  });
+  nb.addEventListener('dragend', () => { ndrag = null; clearNoteMarks(); });
+  nb.addEventListener('dragover', (e) => {
+    const n = e.target.closest('.note');
+    if (!ndrag || !n || n.dataset.nid === ndrag) return;
+    if (!!noteById(ndrag).pinned !== !!noteById(n.dataset.nid).pinned) return;
+    e.preventDefault();
+    $$('.note.drop', nb).forEach((x) => x.classList.toggle('drop', x === n));
+    n.classList.add('drop');
+  });
+  nb.addEventListener('drop', async (e) => {
+    const n = e.target.closest('.note');
+    if (!ndrag || !n) return;
+    e.preventDefault();
+    const moving = noteById(ndrag);
+    const ids = notesSorted().filter((x) => !!x.pinned === !!moving.pinned).map((x) => x.id).filter((id) => id !== ndrag);
+    ids.splice(ids.indexOf(n.dataset.nid), 0, ndrag);
+    ndrag = null;
+    clearNoteMarks();
+    await api.call('notes:reorder', { ids });
+  });
+
   const nq = $('#nq');
   nq.addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter' || !nq.value.trim()) return;
@@ -393,7 +427,12 @@ function renderWorkday() {
   const el = $('#workday');
   if (!el) return;
   const w = workdayInfo();
-  el.classList.toggle('hidden', !w.isDay);
+  const off = S.data.todayOff;
+  el.classList.toggle('hidden', !w.isDay && !off);
+  if (off) {
+    el.innerHTML = `<div class="wd-top"><span>${off === 'vac' ? '🏖 היום: חופש' : '🩹 היום: מחלה'}</span><span class="muted">נספר כיום מלא</span></div>`;
+    return;
+  }
   if (!w.isDay) return;
   el.innerHTML = `
     <div class="wd-top"><span>${icon('sun')} יום עבודה <b>${w.pct}%</b></span><span class="muted">${w.note}</span></div>
@@ -402,7 +441,9 @@ function renderWorkday() {
 setInterval(() => { if (view === 'main') renderWorkday(); }, 30000);
 
 /* notes */
-const notesSorted = () => S.data.notes.slice().sort((a, b) => (b.pinned - a.pinned) || ((b.updatedAt || 0) - (a.updatedAt || 0)));
+// pinned first; inside each group: dragged order, then newest (notes never dragged keep newest-first)
+const noteKey = (n) => (typeof n.order === 'number' ? n.order : -((n.createdAt || n.updatedAt || 0) / 1e13));
+const notesSorted = () => S.data.notes.slice().sort((a, b) => (!!b.pinned - !!a.pinned) || (noteKey(a) - noteKey(b)));
 
 function noteHTML(n) {
   const c = COLORS[n.color];
@@ -410,7 +451,7 @@ function noteHTML(n) {
     ? `<div class="n-checks">${(n.checks || []).map((k) => `<div class="n-check ${k.done ? 'done' : ''}" data-action="note-check" data-cid="${k.id}">${icon(k.done ? 'checkbox' : 'square')}<span dir="auto">${esc(k.text)}</span></div>`).join('')}</div>`
     : `<div class="n-text" dir="auto">${esc(n.text)}</div>`;
   return `
-    <div class="note ${n.color ? 'colored' : ''}" data-action="note-open" data-nid="${n.id}" ${c ? `style="--c:${c[1]}"` : ''}>
+    <div class="note ${n.color ? 'colored' : ''}" draggable="true" data-action="note-open" data-nid="${n.id}" ${c ? `style="--c:${c[1]}"` : ''} title="לחיצה לעריכה · גרירה להזזה">
       ${n.pinned ? `<span class="n-pin">${icon('pin')}</span>` : ''}
       ${n.title ? `<div class="n-title" dir="auto">${esc(n.title)}</div>` : ''}
       ${body}
@@ -540,33 +581,57 @@ async function renderDay() {
   daySummary = r.summary;
   const s = daySummary;
   const t = s.today.stats;
+  const wd = s.today.workday;
+  const fo = s.today.focus;
   const c = S.config;
   const goal = c.waterGoal || 8;
-  const ws = hmToMin(c.workStart);
-  const we = hmToMin(c.workEnd);
-  const from = Math.max(0, Math.min(ws - 60, t.arrival != null ? Math.floor(t.arrival / 60) * 60 : ws - 60));
-  const to = Math.min(1440, Math.max(we + 60, t.leave != null ? Math.ceil(t.leave / 60) * 60 : we + 60));
+  const { ws, we, target } = s;
   const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
-  // timeline runs
-  const runs = [];
+  const arr = wd.arrival != null ? wd.arrival : t.arrival;
+  const lv = wd.leave != null ? wd.leave : t.leave;
+  const from = Math.max(0, Math.min(ws - 60, arr != null ? Math.floor(arr / 60) * 60 : ws - 60));
+  const to = Math.min(1440, Math.max(we + 60, lv != null ? Math.ceil(lv / 60) * 60 : we + 60));
+
+  // timeline: work before the start time is shown lighter ("early")
   const line = s.today.line;
-  for (let i = from; i < to;) {
+  const chAt = (i) => {
     let ch = line[i];
-    if (ch === '.' && t.arrival != null && i > t.arrival && i < t.leave) ch = 'b'; // asleep / no data inside the day = break
+    if (ch === '.' && t.arrival != null && i > t.arrival && i < t.leave) ch = 'b';
+    if (ch === 'w' && i < ws) ch = 'e';
+    return ch;
+  };
+  const runs = [];
+  for (let i = from; i < to;) {
+    const ch = chAt(i);
     let j = i + 1;
-    while (j < to) {
-      let cj = line[j];
-      if (cj === '.' && t.arrival != null && j > t.arrival && j < t.leave) cj = 'b';
-      if (cj !== ch) break;
-      j++;
-    }
+    while (j < to && chAt(j) === ch) j++;
     runs.push([i, j, ch]);
     i = j;
   }
   const span = to - from;
   const ticks = [];
   for (let h = Math.ceil(from / 60); h * 60 <= to; h += (span > 720 ? 3 : 2)) ticks.push(h * 60);
-  const maxWeek = Math.max(60, ...s.week.map((d) => d.active));
+
+  // week chart: the dashed line is a full day; a full day reads 8:00 and fills up to the line
+  const days = s.week.filter((d) => d.workday || d.total > 0 || d.off);
+  const scale = Math.max(target * 1.375, ...days.map((d) => d.total));
+  const pct = (m) => Math.round((m / scale) * 1000) / 10;
+  const offLabel = { vac: 'חופש', sick: 'מחלה' };
+  const weekHTML = days.map((d) => {
+    const base = Math.min(d.total, target);
+    const today = d.date === s.today.date;
+    const label = d.total >= target ? fmtMin(target) : (d.total ? fmtMin(d.total) : '');
+    const sub = d.overtime ? `+${fmtMin(d.overtime)}` : d.off ? offLabel[d.off] : today ? 'עכשיו' : '';
+    return `
+      <button class="wk2 ${today ? 'today' : ''} ${d.future && !d.off ? 'fut' : ''}" data-action="day-edit" data-date="${d.date}" title="לחיצה: תיקון / חופש / מחלה">
+        <div class="wk2-col">
+          <i class="wk2-tgt" style="bottom:${pct(target)}%"></i>
+          ${d.overtime ? `<div class="wk2-ot" style="height:${pct(d.overtime)}%"></div>` : ''}
+          ${base ? `<div class="wk2-fill ${d.off || ''} ${today && !d.off ? 'now' : ''} ${d.overtime ? 'flat' : ''}" style="height:${pct(base)}%">${d.off === 'vac' ? '🏖' : d.off === 'sick' ? '🩹' : ''}</div>` : ''}
+        </div>
+        <b>${label}${d.fixed ? ' ✎' : ''}</b><small>${sub}</small><span>${DOW[d.dow]}</span>
+      </button>`;
+  }).join('');
 
   box.innerHTML = `
     <div class="day-track ${s.enabled ? '' : 'off'}">
@@ -574,25 +639,104 @@ async function renderDay() {
       <button class="switch ${s.enabled ? 'on' : ''}" data-action="track-toggle" title="${s.enabled ? 'כיבוי המעקב' : 'הפעלת המעקב'}"><span></span></button>
     </div>
     ${s.enabled ? '' : `<p class="muted small center">כשהמעקב כבוי לא נרשם דבר. פס יום העבודה והתזכורות ממשיכים לעבוד.</p>`}
-    <div class="stats">
-      <div class="stat"><b>${fmtMin(t.active)}</b><span>שעות פעילות</span></div>
-      <div class="stat"><b>${t.breaks}</b><span>הפסקות</span></div>
-      <div class="stat"><b>${fmtMin(t.breakMinutes)}</b><span>סה״כ הפסקות</span></div>
-    </div>
+    ${wd.off ? `
+      <div class="day-off ${wd.off}">${wd.off === 'vac' ? '🏖 היום מסומן כחופש' : '🩹 היום מסומן כמחלה'} · נספר ${fmtMin(target)}
+        <button class="ghost sm" data-action="day-edit" data-date="${s.today.date}">שינוי</button></div>` : `
+      <div class="stats stats4">
+        <div class="stat"><b>${fmtMin(wd.total)}</b><span>זמן עבודה<br>כולל הפסקות</span></div>
+        <div class="stat"><b>${fmtMin(wd.breakMinutes || 0)}</b><span>הפסקות${wd.breaks != null ? `<br>(${wd.breaks})` : ''}</span></div>
+        <div class="stat"><b class="acc">${wd.overtime ? `+${fmtMin(wd.overtime)}` : '0:00'}</b><span>שעות<br>נוספות</span></div>
+        <div class="stat hl"><b class="acc">${fmtMin(fo.len || 0)}</b><span>רצף ריכוז<br>הכי ארוך</span></div>
+      </div>
+      ${fo.len ? `<p class="muted small day-note">${icon('bolt')} הרצף הארוך: ${clock(fo.start)}–${clock(fo.end)} בלי הפסקה של ${s.breakMin}+ דק׳</p>` : ''}
+      ${wd.early ? `<p class="muted small day-note">${icon('sun')} הגעת ב-${clock(wd.arrival)} · <b class="acc">+${fmtMin(wd.early)} לפני ${clock(ws)}</b> נספר כשעות נוספות</p>` : ''}
+      ${wd.late ? `<p class="muted small day-note">${icon('clock')} <b class="acc">+${fmtMin(wd.late)} אחרי ${clock(we)}</b> נספר כשעות נוספות</p>` : ''}`}
     <div class="sec-t">ציר היום</div>
-    <div class="tl">${runs.map(([a, b, ch]) => `<div class="tl-${ch === 'w' ? 'w' : ch === 'b' ? 'b' : ch === 'o' ? 'o' : 'n'}" style="width:${((b - a) / span) * 100}%" title="${clock(a)}–${clock(b)}"></div>`).join('')}
+    <div class="tl">${runs.map(([a, b, ch]) => `<div class="tl-${ch === 'w' ? 'w' : ch === 'e' ? 'e' : ch === 'b' ? 'b' : ch === 'o' ? 'o' : 'n'}" style="width:${((b - a) / span) * 100}%" title="${clock(a)}–${clock(b)}"></div>`).join('')}
       ${nowMin >= from && nowMin <= to ? `<div class="tl-now" style="left:${((nowMin - from) / span) * 100}%"></div>` : ''}</div>
     <div class="tl-axis">${ticks.map((m) => `<span style="left:${((m - from) / span) * 100}%">${clock(m)}</span>`).join('')}</div>
-    <div class="tl-legend"><span><i class="lg-w"></i>עבודה</span><span><i class="lg-b"></i>הפסקה (${s.breakMin}+ דק׳)</span><span><i class="lg-o"></i>לא נמדד</span></div>
-    <div class="kv"><span>הגעה (פעילות ראשונה)</span><b dir="ltr">${t.arrival != null ? clock(t.arrival) : '—'}</b></div>
+    <div class="tl-legend"><span><i class="lg-w"></i>עבודה</span><span><i class="lg-e"></i>לפני ${clock(ws)}</span><span><i class="lg-b"></i>הפסקה (${s.breakMin}+ דק׳)</span><span><i class="lg-o"></i>לא נמדד</span></div>
+    <div class="kv"><span>הגעה${wd.fixed && !wd.off ? ' <small class="acc">(תוקן ידנית)</small>' : ''}</span><b dir="ltr">${wd.arrival != null ? clock(wd.arrival) : '—'} <button class="icon-btn sm kv-edit" data-action="day-edit" data-date="${s.today.date}" title="תיקון היום">${icon('edit')}</button></b></div>
     <div class="kv"><span>הפסקה הכי ארוכה</span><b>${t.longest ? `${t.longest} דק׳ (${clock(t.longestAt)})` : '—'}</b></div>
-    <div class="kv"><span>ממוצע השבוע (ימים קודמים)</span><b>${s.weekAvg != null ? `${fmtMin(s.weekAvg)} שעות` : '—'}</b></div>
+    <div class="kv"><span>השבוע עד עכשיו</span><b>${fmtMin(s.weekTotal)} / ${fmtMin(s.weekTarget)}</b></div>
+    <div class="kv"><span>שעות נוספות החודש</span><b class="acc">${s.monthOver ? `+${fmtMin(s.monthOver)}` : '0:00'}</b></div>
     <div class="sec-t">${icon('droplet')} מים היום <span class="muted">${s.today.water} / ${goal} כוסות</span></div>
     <div class="cups">${Array.from({ length: Math.max(goal, s.today.water) }, (_, i) => `<span class="cup ${i < s.today.water ? 'full' : ''}"></span>`).join('')}</div>
     <div class="btns"><button class="ghost sm" data-action="water" data-d="1">${icon('plus')} שתיתי כוס</button>${s.today.water ? `<button class="ghost sm" data-action="water" data-d="-1">${icon('minus')} ביטול</button>` : ''}</div>
-    <div class="sec-t">השבוע</div>
-    <div class="week">${s.week.filter((d) => (c.workDays || []).includes(d.dow) || d.active).map((d) => `
-      <div class="wk ${d.date === s.today.date ? 'today' : ''}"><div class="wk-bar"><div style="height:${Math.round((d.active / maxWeek) * 100)}%"></div></div><span>${DOW[d.dow]}</span><small>${d.active ? fmtMin(d.active) : ''}</small></div>`).join('')}</div>`;
+    <div class="sec-t">השבוע <span class="muted">· לחיצה על יום = תיקון / חופש / מחלה</span></div>
+    <div class="week2">${weekHTML}</div>
+    <div class="tl-legend wk2-legend"><span><i class="lg-w"></i>עבודה</span><span><i class="lg-ot"></i>שעות נוספות</span><span><i class="lg-vac"></i>חופש</span><span><i class="lg-sick"></i>מחלה</span><span>✎ תוקן ידנית</span></div>`;
+}
+
+/* fix a day / mark vacation or sick */
+const TIME15 = Array.from({ length: 76 }, (_, i) => clock(300 + i * 15));
+async function openDayEdit(date) {
+  const r = await api.call('activity:day', { date });
+  if (!r.ok) { toast(errText(r), 'warn'); return; }
+  const { measured, fix, future } = r.day;
+  const [y, mo, d] = date.split('-').map(Number);
+  const dt = new Date(y, mo - 1, d);
+  const st = { type: fix ? fix.type : (future ? 'vac' : 'work'), arrive: fix ? fix.arrive : '', leave: fix ? fix.leave : '', breaks: fix && fix.breaks != null ? String(fix.breaks) : '', note: fix ? fix.note || '' : '' };
+  const mArr = measured.arrival != null ? clock(measured.arrival) : '';
+  const mLeave = measured.leave != null ? clock(measured.leave) : '';
+  const opts = (sel, mLabel) => `<option value="">${mLabel ? `לפי המדידה (${mLabel})` : 'לא נמדד'}</option>${TIME15.map((x) => `<option value="${x}" ${x === sel ? 'selected' : ''}>${x}</option>`).join('')}`;
+
+  showModal(`
+    <h3>${icon('edit')} ${DOW[dt.getDay()]} ${d}.${mo}${future ? ' <small class="muted">(עתידי)</small>' : ''}</h3>
+    <div class="seg de-type">
+      ${future ? '' : `<button data-t="work">${icon('briefcase')} יום עבודה</button>`}
+      <button data-t="vac">🏖 חופש</button>
+      <button data-t="sick">🩹 מחלה</button>
+    </div>
+    <div class="de-work">
+      <div class="set-row"><span>הגעה</span><select class="de-a">${opts(st.arrive, mArr)}</select></div>
+      <div class="set-row"><span>יציאה</span><select class="de-l">${opts(st.leave, mLeave)}</select></div>
+      <div class="set-row"><span>הפסקות</span><select class="de-b">
+        <option value="">לפי המדידה (${fmtMin(measured.breakMinutes || 0)})</option>
+        ${[0, 15, 30, 45, 60, 90, 120].map((m) => `<option value="${m}">${fmtMin(m)}</option>`).join('')}
+      </select></div>
+      <label class="lbl">הערה (רשות)<input class="de-n" dir="auto" placeholder="למשל: פגישה אצל לקוח"></label>
+      <div class="de-prev"></div>
+    </div>
+    <div class="de-off warn small"></div>
+    <div class="m-actions">
+      ${fix ? '<button class="ghost m-reset">החזרה למדידה האוטומטית</button>' : ''}
+      <span class="spacer"></span>
+      <button class="ghost m-cancel">ביטול</button>
+      <button class="primary m-save">שמירה</button>
+    </div>`, (m) => {
+    $('.de-b', m).value = st.breaks;
+    $('.de-n', m).value = st.note;
+    const target = daySummary ? daySummary.target : 480;
+    const draw = () => {
+      $$('.de-type button', m).forEach((b) => b.classList.toggle('on', b.dataset.t === st.type));
+      $('.de-work', m).classList.toggle('hidden', st.type !== 'work');
+      $('.de-off', m).classList.toggle('hidden', st.type === 'work');
+      $('.de-off', m).innerHTML = `<span>היום יסומן כ<b>${st.type === 'vac' ? 'חופש' : 'מחלה'}</b> וייספר כ-${fmtMin(target)} בשבוע ובחודש — בלי שעות נוספות ובלי התראות שעה ומים.</span>`;
+      const a = st.arrive ? hmToMin(st.arrive) : measured.arrival;
+      const l = st.leave ? hmToMin(st.leave) : measured.leave;
+      const tot = a != null && l != null && l > a ? l - a : 0;
+      $('.de-prev', m).innerHTML = `אחרי התיקון: <b>${fmtMin(tot)}</b>${measured.total && tot !== measured.total ? ` (במקום ${fmtMin(measured.total)})` : ''}${tot > target ? ` · <span class="acc">+${fmtMin(tot - target)} נוספות</span>` : ''}`;
+    };
+    draw();
+    $('.de-type', m).onclick = (e) => { const b = e.target.closest('button'); if (b) { st.type = b.dataset.t; draw(); } };
+    $('.de-a', m).onchange = (e) => { st.arrive = e.target.value; draw(); };
+    $('.de-l', m).onchange = (e) => { st.leave = e.target.value; draw(); };
+    $('.m-cancel', m).onclick = closeModal;
+    const reset = $('.m-reset', m);
+    if (reset) reset.onclick = async () => { await api.call('activity:unfix', { date }); closeModal(); toast('חזר למדידה האוטומטית'); renderDay(); };
+    $('.m-save', m).onclick = async () => {
+      if (st.type === 'work' && !st.arrive && !st.leave && $('.de-b', m).value === '' && !$('.de-n', m).value.trim()) {
+        closeModal();
+        return;
+      }
+      const res = await api.call('activity:fix', { date, type: st.type, arrive: st.arrive, leave: st.leave, breaks: $('.de-b', m).value === '' ? null : Number($('.de-b', m).value), note: $('.de-n', m).value });
+      if (!res.ok) { toast(errText(res), 'warn'); return; }
+      closeModal();
+      toast(st.type === 'work' ? 'היום תוקן' : `סומן כ${st.type === 'vac' ? 'חופש' : 'מחלה'}`);
+      renderDay();
+    };
+  });
 }
 setInterval(() => { if (view === 'main' && mode === 'day' && S.ui.expanded) renderDay(); }, 60000);
 
@@ -812,6 +956,7 @@ async function onPanelClick(e) {
     case 'edit-item': e.stopPropagation(); openItemEditor(item); break;
     case 'add-item': openItemEditor(null); break;
     case 'mode': setMode(a.dataset.mode); break;
+    case 'day-edit': e.stopPropagation(); openDayEdit(a.dataset.date); break;
     case 'toggle-done': {
       e.stopPropagation();
       const r = await api.call('data:toggleDone', { vault: item.vault, id: item.id });
@@ -848,6 +993,7 @@ function bindDrag() {
   panel.addEventListener('dragstart', (e) => {
     const tab = e.target.closest && e.target.closest('.tab[data-id]');
     const item = e.target.closest && e.target.closest('.item');
+    if (e.target.closest && e.target.closest('.note')) return; // notes have their own drag & drop
     if (tab) drag = { type: 'tab', id: tab.dataset.id, el: tab };
     else if (item && !query) drag = { type: 'item', id: item.dataset.id, el: item };
     else { e.preventDefault(); return; }

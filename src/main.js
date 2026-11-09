@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const { Vault, VaultError } = require('./vault');
 const { Config, DEFAULTS } = require('./config');
 const launcher = require('./launcher');
-const { Activity, combine, stats, dateKey } = require('./activity');
+const { Activity, combine, stats, focusStreak, workday, dateKey } = require('./activity');
 
 if (process.env.SARGEL_USER_DATA) app.setPath('userData', process.env.SARGEL_USER_DATA);
 
@@ -545,6 +545,8 @@ function publicState() {
     ? p.data.launchers.filter((l) => !l.deleted).sort((a, b) => (a.order || 0) - (b.order || 0))
     : [];
   data.notes = p && p.unlocked ? p.data.notes.filter((n) => !n.deleted) : [];
+  const tf = activity ? getFix(dateKey()) : null;
+  data.todayOff = tf && (tf.type === 'vac' || tf.type === 'sick') ? tf.type : null;
   data.tracker = p && p.unlocked ? {
     sessions: p.data.sessions.filter((x) => !x.deleted),
     checks: p.data.tchecks.filter((x) => !x.deleted),
@@ -975,10 +977,29 @@ function saveNote({ note: n }) {
     updatedAt: now,
   };
   const idx = v.data.notes.findIndex((x) => x.id === id);
-  clean.createdAt = idx >= 0 && v.data.notes[idx].createdAt ? v.data.notes[idx].createdAt : now;
+  const prev = idx >= 0 && !v.data.notes[idx].deleted ? v.data.notes[idx] : null;
+  clean.createdAt = prev && prev.createdAt ? prev.createdAt : now;
+  // keep a note's place when it's edited; a new one goes first in its group
+  if (prev && typeof prev.order === 'number' && prev.pinned === clean.pinned) clean.order = prev.order;
+  else {
+    const group = v.data.notes.filter((x) => !x.deleted && x.id !== id && !!x.pinned === clean.pinned && typeof x.order === 'number');
+    if (group.length) clean.order = Math.min(...group.map((x) => x.order)) - 1;
+  }
   if (idx >= 0) v.data.notes[idx] = clean; else v.data.notes.push(clean);
   queueSave('personal');
   return { id };
+}
+
+/** drag & drop: ids in their new order (one group — pinned or not) */
+function reorderNotes({ ids }) {
+  const v = requireVault('personal');
+  if (!Array.isArray(ids)) throw new VaultError('BAD_INPUT');
+  const now = Date.now();
+  ids.slice(0, 2000).forEach((nid, i) => {
+    const n = v.data.notes.find((x) => x.id === nid && !x.deleted);
+    if (n && n.order !== i) { n.order = i; n.updatedAt = now; }
+  });
+  queueSave('personal');
 }
 
 function deleteNote({ id }) {
@@ -1357,29 +1378,113 @@ function dayView(key) {
   return { line: combine(lines), water };
 }
 
+/* manual day fixes + vacation / sick days (synced in the vault; cached for when it's locked) */
+const fixCache = new Map();
+function getFix(date) {
+  const v = vaults.personal;
+  if (v && v.unlocked) {
+    const f = v.data.dayfix.find((x) => x.id === date && !x.deleted) || null;
+    if (f) fixCache.set(date, f); else fixCache.delete(date);
+    return f;
+  }
+  return fixCache.get(date) || null;
+}
+
+const HM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+function saveDayFix({ date, type, arrive, leave, breaks, note }) {
+  const v = requireVault('personal');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new VaultError('BAD_INPUT');
+  const clean = {
+    id: date,
+    date,
+    type: ['work', 'vac', 'sick'].includes(type) ? type : 'work',
+    arrive: HM_RE.test(arrive || '') ? arrive : '',
+    leave: HM_RE.test(leave || '') ? leave : '',
+    breaks: Number.isFinite(Number(breaks)) && breaks !== null && breaks !== '' ? Math.round(clamp(breaks, 0, 600)) : null,
+    note: str(note, 300),
+    updatedAt: Date.now(),
+  };
+  const i = v.data.dayfix.findIndex((x) => x.id === date);
+  if (i >= 0) v.data.dayfix[i] = clean; else v.data.dayfix.push(clean);
+  fixCache.set(date, clean);
+  queueSave('personal');
+}
+
+function clearDayFix({ date }) {
+  const v = requireVault('personal');
+  const now = Date.now();
+  v.data.dayfix = v.data.dayfix.map((x) => (x.id === date ? { id: date, deleted: true, updatedAt: now } : x));
+  fixCache.delete(date);
+  queueSave('personal');
+}
+
 function activitySummary() {
   const breakMin = cfg.get('breakMinutes');
+  const ws = hm(cfg.get('workStart'));
+  const we = hm(cfg.get('workEnd'));
+  const target = we - ws;
+  const workDays = cfg.get('workDays') || [];
   const now = new Date();
   const todayKey = dateKey(now);
-  const today = dayView(todayKey);
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const dayInfo = (k) => {
+    const dv = k <= todayKey ? dayView(k) : { line: '.'.repeat(1440), water: 0 };
+    const fix = getFix(k);
+    const wd = workday(dv.line, breakMin, { ws, we, fix, nowMin: k === todayKey ? nowMin : null });
+    return { dv, fix, wd };
+  };
+
+  const t = dayInfo(todayKey);
   const week = [];
   const start = new Date(now);
   start.setDate(now.getDate() - now.getDay()); // Sunday
+  let weekTotal = 0;
   for (let i = 0; i < 7; i++) {
     const d = new Date(start);
     d.setDate(start.getDate() + i);
     const k = dateKey(d);
-    const dv = k <= todayKey ? dayView(k) : { line: '', water: 0 };
-    week.push({ date: k, dow: i, future: k > todayKey, active: dv.line ? stats(dv.line, breakMin).active : 0, water: dv.water });
+    const { dv, fix, wd } = dayInfo(k);
+    if (k <= todayKey) weekTotal += wd.total;
+    week.push({ date: k, dow: i, future: k > todayKey, workday: workDays.includes(i), total: wd.total, overtime: wd.overtime, off: wd.off, fixed: !!fix && !wd.off, water: dv.water });
   }
-  const done = week.filter((d) => !d.future && d.active > 0 && d.date !== todayKey);
+  // overtime this month (days up to today)
+  let monthOver = 0;
+  const m0 = new Date(now.getFullYear(), now.getMonth(), 1);
+  for (let d = new Date(m0); dateKey(d) <= todayKey; d.setDate(d.getDate() + 1)) monthOver += dayInfo(dateKey(d)).wd.overtime;
+
   return {
     enabled: !!cfg.get('trackEnabled'),
     breakMin,
-    today: { date: todayKey, line: today.line, water: today.water, stats: stats(today.line, breakMin) },
+    target,
+    ws,
+    we,
+    today: {
+      date: todayKey,
+      line: t.dv.line,
+      water: t.dv.water,
+      stats: stats(t.dv.line, breakMin),
+      workday: t.wd,
+      focus: focusStreak(t.dv.line, breakMin),
+      fix: t.fix,
+    },
     week,
-    weekAvg: done.length ? Math.round(done.reduce((s, d) => s + d.active, 0) / done.length) : null,
+    weekTotal,
+    weekTarget: workDays.length * target,
+    monthOver,
   };
+}
+
+/** details for the "fix this day" dialog */
+function dayForEdit({ date }) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) throw new VaultError('BAD_INPUT');
+  const breakMin = cfg.get('breakMinutes');
+  const ws = hm(cfg.get('workStart'));
+  const we = hm(cfg.get('workEnd'));
+  const isToday = date === dateKey();
+  const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+  const dv = date <= dateKey() ? dayView(date) : { line: '.'.repeat(1440) };
+  const measured = workday(dv.line, breakMin, { ws, we, nowMin: isToday ? nowMin : null });
+  return { day: { date, measured, fix: getFix(date), future: date > dateKey() } };
 }
 
 function remindersTick() {
@@ -1388,6 +1493,8 @@ function remindersTick() {
   const now = new Date();
   if (!(cfg.get('workDays') || []).includes(now.getDay())) return;
   const key = dateKey(now);
+  const todayFix = getFix(key);
+  if (todayFix && (todayFix.type === 'vac' || todayFix.type === 'sick')) return; // day off: no reminders
   const m = now.getHours() * 60 + now.getMinutes();
   const ws = hm(cfg.get('workStart'));
   const we = hm(cfg.get('workEnd'));
@@ -1668,6 +1775,10 @@ function registerIpc() {
   handle('trk:jobDelete', (a) => deleteJob(a));
 
   handle('activity:get', () => ({ summary: activitySummary() }));
+  handle('activity:day', (a) => dayForEdit(a));
+  handle('activity:fix', (a) => saveDayFix(a));
+  handle('activity:unfix', (a) => clearDayFix(a));
+  handle('notes:reorder', (a) => reorderNotes(a));
   handle('activity:water', ({ delta }) => {
     const n = activity.addWater(dateKey(), delta > 0 ? 1 : -1);
     activity.save();
@@ -1792,7 +1903,7 @@ async function boot() {
     require('./devshots')({
       app, state, tstate, tracker: () => tracker, vaults, setExpanded, trk: { startBlock, toggleSub, addSub, blockToggleWithToast, saveLauncher, runLauncher }, createVault, openVault, unlockPersonal, lockAll, showSearch, showKeys, broadcast,
       sidebar: () => sidebar, search: () => searchWin, keys: () => keysWin,
-      quick: () => quickWin, toastWin: () => toastWin, showQuick, showToast, activity: () => activity,
+      quick: () => quickWin, toastWin: () => toastWin, showQuick, showToast, activity: () => activity, activitySummary,
     });
   }
 }
