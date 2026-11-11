@@ -236,36 +236,26 @@ function flash(el) {
   el.classList.add('flash');
 }
 
-/* switch tabs: while a panel is open, the other panels' handles stick out of its side (no text, just color + motion) */
-const PANEL_COLORS = { sidebar: ['#9D5CFF', '#6A45FF'], tracker: ['#F7B6CF', '#F29CBF'], journal: ['#BDE0FE', '#9AC4F8'] };
-let swTimer = null;
+/* switch dots in each panel's header: purple · pink · blue — the open one is filled, a click on another switches */
+const PANEL_COLORS = { sidebar: '#6A45FF', tracker: '#F29CBF', journal: '#9AC4F8' };
+const PANEL_TITLES = { sidebar: 'הסרגל', tracker: 'המעקב', journal: 'יומן' };
 function renderSwitchTabs(me, state) {
-  if (!state || !state.ui || !state.ui.handles) return;
-  let box = document.getElementById('swtabs');
-  if (!box) {
-    box = document.createElement('div');
-    box.id = 'swtabs';
-    box.className = 'swtabs';
-    document.body.appendChild(box);
-    const go = (t) => {
-      clearTimeout(swTimer);
-      t.classList.add('go');
-      setTimeout(() => api.call('ui:switch', { to: t.dataset.to }), 230);
-    };
-    box.addEventListener('mouseover', (e) => {
-      const t = e.target.closest('.swtab');
-      if (!t) return;
-      clearTimeout(swTimer);
-      swTimer = setTimeout(() => go(t), 650); // a short rest on the tab switches; passing by doesn't
-    });
-    box.addEventListener('mouseout', () => clearTimeout(swTimer));
-    box.addEventListener('click', (e) => { const t = e.target.closest('.swtab'); if (t) go(t); });
-  }
-  const tabs = Object.keys(PANEL_COLORS).filter((k) => k !== me && state.ui.enabled && state.ui.enabled[k]);
-  const sig = tabs.map((k) => `${k}:${state.ui.handles[k]}`).join('|');
-  if (box.dataset.sig === sig) return; // don't rebuild under the mouse
+  const box = document.getElementById('swdots');
+  if (!box || !state || !state.ui) return;
+  const keys = Object.keys(PANEL_COLORS).filter((k) => k === me || !state.ui.enabled || state.ui.enabled[k]);
+  const sig = `${me}|${keys.join(',')}`;
+  if (box.dataset.sig === sig) return;
   box.dataset.sig = sig;
-  box.innerHTML = tabs.map((k) => `<div class="swtab" data-to="${k}" style="top:${state.ui.handles[k] + 15}px;background:linear-gradient(180deg,${PANEL_COLORS[k][0]},${PANEL_COLORS[k][1]})"></div>`).join('');
+  box.innerHTML = keys.length > 1 ? keys.map((k) => `<button class="swdot ${k === me ? 'on' : ''}" data-to="${k}" style="background:${PANEL_COLORS[k]}" title="${PANEL_TITLES[k]}" aria-label="${PANEL_TITLES[k]}"></button>`).join('') : '';
+  if (!box.dataset.bound) {
+    box.dataset.bound = '1';
+    box.addEventListener('click', (e) => {
+      const d = e.target.closest('.swdot');
+      if (!d || d.classList.contains('on')) return;
+      e.stopPropagation();
+      api.call('ui:switch', { to: d.dataset.to });
+    });
+  }
 }
 
 function strongPassword(len = 18) {

@@ -1,5 +1,5 @@
 'use strict';
-/* Development only — scripted check of the switch tabs between the three panels. Not packaged. */
+/* Development only — scripted check of the header dots that switch between the three panels. Not packaged. */
 const fs = require('fs');
 const path = require('path');
 
@@ -23,23 +23,19 @@ module.exports = async function devShots(ctx) {
     await ctx.createVault('personal', vdir, 'test-pass-123', false);
     await wait(500);
 
-    // open the pink panel: the purple and blue tabs should stick out of its side
     ctx.setExpanded(true, { explicit: true }, 'tracker');
     await wait(700);
-    const tabs = await js(ctx.tracker(), `[...document.querySelectorAll('.swtab')].map((t) => t.dataset.to + '@' + t.getBoundingClientRect().top + ':' + getComputedStyle(t).display).join(' ')`);
-    log(`tabs in pink panel: ${tabs}`);
-    await snap(ctx.tracker(), '01-pink-with-tabs');
-    // hover the blue tab (simulated) → after a short rest it switches
-    await js(ctx.tracker(), `document.querySelector('.swtab[data-to="journal"]').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))`);
-    await wait(1300);
-    log(`after hovering blue tab: ${openNow()}`);
-    await snap(ctx.journal(), '02-blue-after-switch');
-    // click the purple tab from the blue panel
-    await js(ctx.journal(), `document.querySelector('.swtab[data-to="sidebar"]').click()`);
+    log(`dots in pink: ${await js(ctx.tracker(), `[...document.querySelectorAll('.swdot')].map((d) => d.dataset.to + (d.classList.contains('on') ? '*' : '')).join(' ')`)}`);
+    log(`pink window width: ${ctx.tracker().getBounds().width}`);
+    await snap(ctx.tracker(), '01-pink-dots');
+    await js(ctx.tracker(), `document.querySelector('.swdot[data-to="journal"]').click()`);
     await wait(800);
-    log(`after clicking purple tab: ${openNow()}`);
-    await snap(ctx.sidebar(), '03-purple-after-switch');
-    log(`window width open: ${ctx.sidebar().getBounds().width}`);
+    log(`after blue dot: ${openNow()}`);
+    await snap(ctx.journal(), '02-blue-dots');
+    await js(ctx.journal(), `document.querySelector('.swdot[data-to="sidebar"]').click()`);
+    await wait(800);
+    log(`after purple dot: ${openNow()}`);
+    await snap(ctx.sidebar(), '03-purple-dots');
     log('ok');
   } catch (e) {
     log(`error: ${e && e.stack}`);

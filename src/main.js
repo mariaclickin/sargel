@@ -112,8 +112,8 @@ function collapsedBounds(kind = 'sidebar') {
   return { x, y, width: HANDLE.w, height: HANDLE.h };
 }
 
-// transparent strip beside an open panel, where the other panels' switch tabs stick out
-const TAB_GUTTER = 34;
+// (no extra strip beside an open panel — switching is done with the dots in each panel's header)
+const TAB_GUTTER = 0;
 
 function expandedBounds() {
   const wa = workArea();

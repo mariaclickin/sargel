@@ -203,7 +203,7 @@ function mountLock() {
 function mountMain() {
   panel.innerHTML = `
     <header class="top">
-      <div class="brand"><span class="trk-logo">${icon(PANEL_ICON)}</span><span>${PANEL_NAME}</span></div>
+      <div class="brand"><span class="trk-logo">${icon(PANEL_ICON)}</span><span>${PANEL_NAME}</span><span id="swdots" class="swdots"></span></div>
       <button class="icon-btn" data-a="pin" title="נעיצה — יישאר פתוח">${icon('pin')}</button>
     </header>
     <div class="seg modes trk-modes">
@@ -216,6 +216,7 @@ function mountMain() {
 }
 
 function renderMain() {
+  renderSwitchTabs(PANEL, S);
   $('[data-a="pin"]', panel).classList.toggle('on', myPinned());
   $$('.trk-modes button', panel).forEach((b) => b.classList.toggle('on', b.dataset.m === mode));
   renderView();

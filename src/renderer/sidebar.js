@@ -293,7 +293,7 @@ function renderLockInfo() {
 function mountMain() {
   panel.innerHTML = `
     <header class="top">
-      <div class="brand">${LOGO}<span>הסרגל</span></div>
+      <div class="brand">${LOGO}<span>הסרגל</span><span id="swdots" class="swdots"></span></div>
       <button class="icon-btn" data-action="keyboard" title="מקלדת קיצורים">${icon('keyboard')}</button>
       <button class="icon-btn" data-action="pin" title="נעיצה — הסרגל יישאר פתוח">${icon('pin')}</button>
       <button class="icon-btn" data-action="lock" title="נעילה">${icon('lock')}</button>
@@ -742,6 +742,7 @@ async function openDayEdit(date) {
 setInterval(() => { if (view === 'main' && mode === 'day' && S.ui.expanded) renderDay(); }, 60000);
 
 function renderMain() {
+  renderSwitchTabs('sidebar', S);
   $('[data-action="pin"]', panel).classList.toggle('on', !!S.ui.pinned);
   const hk = $('#hk');
   hk.textContent = S.hotkeyLabel || '';
