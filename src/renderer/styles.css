@@ -94,6 +94,23 @@ body.expanded .handle { display: none; }
   border: 1px solid var(--line); flex-direction: column; overflow: hidden;
 }
 body.expanded .panel { display: flex; animation: slideIn .18s ease-out; }
+/* leave a strip on the inner side of an open panel for the switch tabs */
+.sidebar-body .panel { inset: 10px 10px 10px 44px; }
+.sidebar-body.side-left .panel { inset: 10px 44px 10px 10px; }
+.swtabs { display: none; }
+body.expanded .swtabs { display: block; }
+.swtab {
+  position: absolute; right: calc(100% - 44px); width: 12px; height: 74px; border-radius: 10px 0 0 10px; cursor: pointer;
+  transition: width .22s cubic-bezier(.3, 1.6, .5, 1), height .22s, margin-top .22s, box-shadow .22s;
+}
+.swtab::after { content: ""; position: absolute; left: 4px; top: 50%; width: 3px; height: 24px; margin-top: -12px; border-radius: 2px; background: rgba(255, 255, 255, .8); transition: height .22s, margin-top .22s; }
+.swtab:hover { width: 26px; height: 86px; margin-top: -6px; box-shadow: -4px 0 14px rgba(0, 0, 0, .16); }
+.swtab:hover::after { height: 34px; margin-top: -17px; }
+.swtab.go { animation: swPull .3s ease-in forwards; }
+@keyframes swPull { 0% { width: 26px; } 60% { width: 40px; } 100% { width: 12px; opacity: .25; } }
+body.side-left .swtab { right: auto; left: calc(100% - 44px); border-radius: 0 10px 10px 0; }
+body.side-left .swtab::after { left: auto; right: 4px; }
+body.side-left .swtab:hover { box-shadow: 4px 0 14px rgba(0, 0, 0, .16); }
 body.side-left.expanded .panel { animation-name: slideInL; }
 @keyframes slideIn { from { opacity: 0; transform: translateX(26px); } to { opacity: 1; transform: none; } }
 @keyframes slideInL { from { opacity: 0; transform: translateX(-26px); } to { opacity: 1; transform: none; } }

@@ -236,6 +236,38 @@ function flash(el) {
   el.classList.add('flash');
 }
 
+/* switch tabs: while a panel is open, the other panels' handles stick out of its side (no text, just color + motion) */
+const PANEL_COLORS = { sidebar: ['#9D5CFF', '#6A45FF'], tracker: ['#F7B6CF', '#F29CBF'], journal: ['#BDE0FE', '#9AC4F8'] };
+let swTimer = null;
+function renderSwitchTabs(me, state) {
+  if (!state || !state.ui || !state.ui.handles) return;
+  let box = document.getElementById('swtabs');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'swtabs';
+    box.className = 'swtabs';
+    document.body.appendChild(box);
+    const go = (t) => {
+      clearTimeout(swTimer);
+      t.classList.add('go');
+      setTimeout(() => api.call('ui:switch', { to: t.dataset.to }), 230);
+    };
+    box.addEventListener('mouseover', (e) => {
+      const t = e.target.closest('.swtab');
+      if (!t) return;
+      clearTimeout(swTimer);
+      swTimer = setTimeout(() => go(t), 650); // a short rest on the tab switches; passing by doesn't
+    });
+    box.addEventListener('mouseout', () => clearTimeout(swTimer));
+    box.addEventListener('click', (e) => { const t = e.target.closest('.swtab'); if (t) go(t); });
+  }
+  const tabs = Object.keys(PANEL_COLORS).filter((k) => k !== me && state.ui.enabled && state.ui.enabled[k]);
+  const sig = tabs.map((k) => `${k}:${state.ui.handles[k]}`).join('|');
+  if (box.dataset.sig === sig) return; // don't rebuild under the mouse
+  box.dataset.sig = sig;
+  box.innerHTML = tabs.map((k) => `<div class="swtab" data-to="${k}" style="top:${state.ui.handles[k] + 15}px;background:linear-gradient(180deg,${PANEL_COLORS[k][0]},${PANEL_COLORS[k][1]})"></div>`).join('');
+}
+
 function strongPassword(len = 18) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*-_=+?';
   const b = new Uint32Array(len);

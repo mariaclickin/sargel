@@ -112,9 +112,12 @@ function collapsedBounds(kind = 'sidebar') {
   return { x, y, width: HANDLE.w, height: HANDLE.h };
 }
 
+// transparent strip beside an open panel, where the other panels' switch tabs stick out
+const TAB_GUTTER = 34;
+
 function expandedBounds() {
   const wa = workArea();
-  const w = clamp(cfg.get('width'), 300, 600);
+  const w = clamp(cfg.get('width'), 300, 600) + TAB_GUTTER;
   const x = cfg.get('side') === 'left' ? wa.x : wa.x + wa.width - w;
   return { x, y: wa.y, width: w, height: wa.height };
 }
@@ -614,6 +617,10 @@ function publicState() {
       expanded: state.expanded, pinned: state.pinned,
       trackerExpanded: tstate.expanded, trackerPinned: tstate.pinned,
       journalExpanded: jstate.expanded, journalPinned: jstate.pinned,
+      // where each handle sits (from the top of the work area) — the switch tabs line up with them
+      handles: Object.fromEntries(['sidebar', 'tracker', 'journal'].map((k) => [k, collapsedBounds(k).y - workArea().y])),
+      enabled: { sidebar: true, tracker: cfg.get('trackerEnabled') !== false, journal: cfg.get('journalEnabled') !== false },
+      gutter: TAB_GUTTER,
     },
   };
 }
@@ -1929,6 +1936,10 @@ function registerIpc() {
   handle('j:delete', (a) => jDelete(a));
   handle('j:readToday', (a) => readToday(a));
   handle('j:unreadToday', () => unreadToday());
+  handle('ui:switch', ({ to }) => {
+    if (!['sidebar', 'tracker', 'journal'].includes(to)) throw new VaultError('BAD_INPUT');
+    setExpanded(true, { explicit: true, focus: true }, to);
+  });
   handle('ui:openSidebar', () => setExpanded(true, { explicit: true, focus: true }, 'sidebar'));
   handle('trk:start', (a) => startBlock(a));
   handle('trk:pause', () => pauseBlock());

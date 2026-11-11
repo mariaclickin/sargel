@@ -160,6 +160,7 @@ const hms = (ms) => {
 /* ───────── root ───────── */
 function render() {
   if (!S) return;
+  renderSwitchTabs(PANEL, S);
   body.classList.toggle('side-left', S.config.side === 'left');
   body.classList.toggle('locked', !S.vaults.personal.unlocked);
   const v = !S.vaults.personal.configured ? 'setup' : (!S.vaults.personal.unlocked ? 'lock' : 'main');
