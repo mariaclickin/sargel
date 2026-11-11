@@ -28,7 +28,8 @@ module.exports = async function devShots(ctx) {
 
   try {
     await wait(1800);
-    const tr = ctx.tracker();
+    const tr = ctx.journal();
+    await snap(ctx.sidebar(), 'h-sidebar'); await snap(ctx.tracker(), 'h-tracker'); await snap(tr, 'h-journal');
     const vdir = path.join(dir, 'vault');
     fs.rmSync(vdir, { recursive: true, force: true });
     await ctx.createVault('personal', vdir, 'test-pass-123', false);
@@ -67,10 +68,10 @@ module.exports = async function devShots(ctx) {
     await wait(500);
     log(`quotes after unlock: ${v.data.quotes.length} (starter: ${v.data.quotes.filter((q) => q.starter).length})`);
 
-    ctx.setExpanded(true, { explicit: true }, 'tracker');
-    ctx.tstate.pinned = true;
+    ctx.setExpanded(true, { explicit: true }, 'journal');
+    ctx.jstate.pinned = true;
     await wait(700);
-    await js(tr, `document.querySelector('[data-a="mode"][data-m="journal"]').click()`);
+
     await wait(400);
     for (const m of ['books', 'workouts', 'learning', 'dates', 'quotes']) {
       await js(tr, `document.querySelector('[data-a="jmode"][data-m="${m}"]').click()`);
@@ -91,6 +92,17 @@ module.exports = async function devShots(ctx) {
     await wait(600);
     const bq = v.data.quotes.find((q) => q.bookId);
     log(`book quote: ${bq ? `${bq.source} | ${bq.category}` : 'missing'}`);
+    // the pink panel no longer has the journal tab; the three handles are stacked
+    ctx.jstate.pinned = false;
+    ctx.setExpanded(true, { explicit: true }, 'tracker');
+    ctx.tstate.pinned = true;
+    await wait(600);
+    await snap(ctx.tracker(), 'pink-panel');
+    log(`open: sidebar=${ctx.state.expanded} tracker=${ctx.tstate.expanded} journal=${ctx.jstate.expanded}`);
+    ctx.tstate.pinned = false;
+    ctx.setExpanded(false, {}, 'tracker');
+    await wait(300);
+    log(`handles y: purple=${ctx.sidebar().getBounds().y} pink=${ctx.tracker().getBounds().y} blue=${ctx.journal().getBounds().y}`);
     log('ok');
   } catch (e) {
     log(`error: ${e && e.stack}`);

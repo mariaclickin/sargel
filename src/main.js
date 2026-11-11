@@ -42,14 +42,17 @@ let saveChain = Promise.resolve();
 
 const mkState = () => ({ expanded: false, pinned: false, hold: false, explicitOpen: false, insideSince: 0, outsideSince: 0 });
 const state = mkState(); // purple sidebar
-const tstate = mkState(); // green tracker panel
+const tstate = mkState(); // pink tracker panel
+const jstate = mkState(); // blue journal panel
 let tracker = null;
+let journalWin = null;
 
-/** the two edge drawers that share the hover / slide-out behaviour */
+/** the edge drawers that share the hover / slide-out behaviour */
 function drawers() {
   return [
     { kind: 'sidebar', win: sidebar, st: state },
     { kind: 'tracker', win: tracker, st: tstate },
+    { kind: 'journal', win: journalWin, st: jstate },
   ];
 }
 const drawerByKind = (kind) => drawers().find((d) => d.kind === kind);
@@ -57,6 +60,7 @@ const anyExpanded = () => drawers().some((d) => d.st.expanded);
 function reshowDrawers() {
   if (sidebar) sidebar.showInactive();
   if (tracker && cfg.get('trackerEnabled') !== false) tracker.showInactive();
+  if (journalWin && cfg.get('journalEnabled') !== false) journalWin.showInactive();
 }
 const drawerBySender = (sender) => drawers().find((d) => d.win && !d.win.isDestroyed() && d.win.webContents === sender) || drawers()[0];
 const vaults = { personal: null, team: null };
@@ -97,9 +101,12 @@ function workArea() {
 function collapsedBounds(kind = 'sidebar') {
   const wa = workArea();
   let y = Math.round(wa.y + (wa.height - HANDLE.h) * clamp(cfg.get('handleY'), 0, 1));
-  if (kind === 'tracker') {
-    // right below the sidebar handle; above it if there's no room
-    y = y + HANDLE.h + 10 + HANDLE.h <= wa.y + wa.height ? y + HANDLE.h + 10 : y - HANDLE.h - 10;
+  // the pink handle sits right below the purple one, the blue one below the pink (or above, if there's no room)
+  const steps = kind === 'tracker' ? 1 : kind === 'journal' ? 2 : 0;
+  if (steps) {
+    const gap = HANDLE.h + 10;
+    const below = y + steps * gap;
+    y = below + HANDLE.h <= wa.y + wa.height ? below : y - steps * gap;
   }
   const x = cfg.get('side') === 'left' ? wa.x : wa.x + wa.width - HANDLE.w;
   return { x, y, width: HANDLE.w, height: HANDLE.h };
@@ -139,6 +146,24 @@ function createTracker() {
   tracker.on('blur', () => { if (!tstate.pinned) tstate.explicitOpen = false; });
   tracker.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   tracker.webContents.on('will-navigate', (e) => e.preventDefault());
+}
+
+/* the blue "journal" panel — same page as the tracker, opened in journal mode */
+function createJournal() {
+  journalWin = new BrowserWindow({
+    ...collapsedBounds('journal'),
+    frame: false, transparent: true, resizable: false, movable: false, minimizable: false, maximizable: false,
+    fullscreenable: false, skipTaskbar: true, alwaysOnTop: true, hasShadow: false, show: false, acceptFirstMouse: true,
+    backgroundColor: '#00000000', title: 'הסרגל — יומן', webPreferences,
+  });
+  journalWin.setAlwaysOnTop(true, 'floating');
+  if (isMac) journalWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  journalWin.loadFile(path.join(RENDERER, 'tracker.html'), { query: { panel: 'journal' } });
+  journalWin.once('ready-to-show', () => { if (cfg.get('journalEnabled') !== false) journalWin.showInactive(); });
+  journalWin.on('close', (e) => { if (!quitting) e.preventDefault(); });
+  journalWin.on('blur', () => { if (!jstate.pinned) jstate.explicitOpen = false; });
+  journalWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  journalWin.webContents.on('will-navigate', (e) => e.preventDefault());
 }
 
 // ───────────────────────── windows ─────────────────────────
@@ -433,6 +458,7 @@ function rebuildTrayMenu() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'פתיחת הסרגל', click: () => setExpanded(true, { explicit: true, focus: true }) },
     { label: 'פתיחת המעקב', click: () => { if (cfg.get('trackerEnabled') === false) applyConfig({ trackerEnabled: true }); setExpanded(true, { explicit: true, focus: true }, 'tracker'); } },
+    { label: 'פתיחת היומן', click: () => { if (cfg.get('journalEnabled') === false) applyConfig({ journalEnabled: true }); setExpanded(true, { explicit: true, focus: true }, 'journal'); } },
     { label: `חיפוש מהיר${hk ? `   (${hk})` : ''}`, click: () => showSearch() },
     { label: `מקלדת קיצורים${cfg.get('launcherHotkey') ? `   (${prettyHotkey(cfg.get('launcherHotkey'))})` : ''}`, click: () => showKeys() },
     { label: `פתק מהיר${cfg.get('quickNoteHotkey') ? `   (${prettyHotkey(cfg.get('quickNoteHotkey'))})` : ''}`, click: () => showQuick() },
@@ -501,7 +527,7 @@ function applyConfig(patch) {
   if (hm.test(patch.workStart || '')) clean.workStart = patch.workStart;
   if (hm.test(patch.workEnd || '')) clean.workEnd = patch.workEnd;
   if (Array.isArray(patch.workDays)) clean.workDays = [...new Set(patch.workDays.map(Number).filter((d) => d >= 0 && d <= 6))].sort();
-  for (const k of ['trackEnabled', 'hourlyNotify', 'waterReminder', 'trackerEnabled']) if (k in patch) clean[k] = !!patch[k];
+  for (const k of ['trackEnabled', 'hourlyNotify', 'waterReminder', 'trackerEnabled', 'journalEnabled']) if (k in patch) clean[k] = !!patch[k];
   if ('breakMinutes' in patch) clean.breakMinutes = Math.round(clamp(patch.breakMinutes, 3, 60));
   if ('waterMinutes' in patch) clean.waterMinutes = Math.round(clamp(patch.waterMinutes, 15, 240));
   if ('waterGoal' in patch) clean.waterGoal = Math.round(clamp(patch.waterGoal, 1, 20));
@@ -515,6 +541,10 @@ function applyConfig(patch) {
   if ('trackerEnabled' in clean && tracker) {
     if (clean.trackerEnabled) tracker.showInactive();
     else { setExpanded(false, {}, 'tracker'); tracker.hide(); }
+  }
+  if ('journalEnabled' in clean && journalWin) {
+    if (clean.journalEnabled) journalWin.showInactive();
+    else { setExpanded(false, {}, 'journal'); journalWin.hide(); }
   }
   if ('side' in clean || 'handleY' in clean || 'width' in clean) reposition();
   rebuildTrayMenu();
@@ -580,13 +610,17 @@ function publicState() {
     vaults: { personal: info('personal'), team: info('team') },
     rememberTeam: !!(p && p.unlocked && p.data.settings.teamPassword),
     data,
-    ui: { expanded: state.expanded, pinned: state.pinned, trackerExpanded: tstate.expanded, trackerPinned: tstate.pinned },
+    ui: {
+      expanded: state.expanded, pinned: state.pinned,
+      trackerExpanded: tstate.expanded, trackerPinned: tstate.pinned,
+      journalExpanded: jstate.expanded, journalPinned: jstate.pinned,
+    },
   };
 }
 
 function broadcast() {
   const s = publicState();
-  for (const w of [sidebar, tracker, searchWin, keysWin, quickWin]) {
+  for (const w of [sidebar, tracker, journalWin, searchWin, keysWin, quickWin]) {
     if (w && !w.isDestroyed()) w.webContents.send('state', s);
   }
 }
@@ -1786,7 +1820,7 @@ function openExternal(url) {
 // ───────────────────────── IPC ─────────────────────────
 function handle(channel, fn) {
   ipcMain.handle(channel, async (e, arg) => {
-    const ok = [sidebar, tracker, searchWin, keysWin, quickWin, toastWin].some((w) => w && !w.isDestroyed() && w.webContents === e.sender);
+    const ok = [sidebar, tracker, journalWin, searchWin, keysWin, quickWin, toastWin].some((w) => w && !w.isDestroyed() && w.webContents === e.sender);
     if (!ok) return { ok: false, code: 'FORBIDDEN' };
     try {
       const r = await fn(arg || {}, e);
@@ -2011,6 +2045,7 @@ async function boot() {
   registerIpc();
   createSidebar();
   createTracker();
+  createJournal();
   createSearch();
   createKeys();
   createQuick();
@@ -2040,7 +2075,7 @@ async function boot() {
   if (process.env.SARGEL_SHOTS) {
     // development only: scripted screenshots of every screen
     require('./devshots')({
-      app, state, tstate, tracker: () => tracker, vaults, setExpanded, trk: { startBlock, toggleSub, addSub, blockToggleWithToast, saveLauncher, runLauncher }, createVault, openVault, unlockPersonal, lockAll, showSearch, showKeys, broadcast,
+      app, state, tstate, jstate, tracker: () => tracker, journal: () => journalWin, vaults, setExpanded, trk: { startBlock, toggleSub, addSub, blockToggleWithToast, saveLauncher, runLauncher }, createVault, openVault, unlockPersonal, lockAll, showSearch, showKeys, broadcast,
       sidebar: () => sidebar, search: () => searchWin, keys: () => keysWin,
       quick: () => quickWin, toastWin: () => toastWin, showQuick, showToast, activity: () => activity, activitySummary,
     });

@@ -703,7 +703,23 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent) !importa
 .job-note { white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .jb-add { margin: 6px 4px; width: calc(100% - 8px); justify-content: center; }
 
-/* ─────────────── journal tab (pink panel) ─────────────── */
+/* ─────────────── journal panel (blue: #9AC4F8 · #BDE0FE · #CEF4FF · text #2B5C9E) ─────────────── */
+.journal-body { --accent: #9AC4F8; --accent-2: #BDE0FE; --accent-soft: #CEF4FF; --accent-text: #2B5C9E; --accent-strong: #6FA6EE; }
+@media (prefers-color-scheme: dark) { .journal-body { --accent: #9AC4F8; --accent-2: #BDE0FE; --accent-soft: #1C3550; --accent-text: #BDE0FE; --accent-strong: #9AC4F8; } }
+.journal-body .handle { background: linear-gradient(180deg, #BDE0FE, #9AC4F8); box-shadow: -2px 0 10px rgba(110, 160, 230, .45); }
+.journal-body.side-left .handle { box-shadow: 2px 0 10px rgba(110, 160, 230, .45); }
+.journal-body .trk-logo, .journal-body .trk-hero { background: linear-gradient(135deg, #BDE0FE, #9AC4F8); color: #2B5C9E; }
+.journal-body .trk-modes { display: none; }
+/* pastel blue is light — text on it stays dark blue for readability */
+.journal-body .primary { color: #0C2D57; box-shadow: 0 6px 16px rgba(154, 196, 248, .45); }
+.journal-body .jtabs button.on, .journal-body .st-chip.on, .journal-body .qcats button.on,
+.journal-body .btn-pink.fill, .journal-body .btn-pink:hover, .journal-body .jcount.soon,
+.journal-body .tb-play.on, .journal-body .tb-play:hover { color: #0C2D57; }
+.journal-body .jcount.soon small { color: #2B5C9E; }
+.journal-body .jd i.on { background: #9AC4F8; }
+.journal-body .jd i.fz { background: #CEF4FF; outline: 1px solid #9AC4F8; }
+
+/* ─────────────── journal tab ─────────────── */
 .trk-modes button { font-size: 11.5px; padding: 0 2px; }
 .trk-modes button .ic { display: none; }
 .jtabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin: 0 4px 12px; }

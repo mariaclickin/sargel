@@ -1679,6 +1679,7 @@ function openSettings() {
       <h4>כללי</h4>
       <label class="check"><input type="checkbox" class="s-login"><span>הפעלה אוטומטית כשהמחשב נדלק</span></label>
       <label class="check"><input type="checkbox" class="s-tracker"><span>להציג את ידית "המעקב" (הוורודה) <small>חודש · צ'קליסט · TIME BLOCKS · עבודות</small></span></label>
+      <label class="check"><input type="checkbox" class="s-journal"><span>להציג את ידית "היומן" (הכחולה) <small>ספרים · אימונים · למידה · תאריכים · משפטים</small></span></label>
       <div class="set-row"><span class="muted small">גרסה ${esc(S.version)}</span><button class="link-btn" data-s="quit">יציאה מהסרגל</button></div>
     </div>
 
@@ -1709,6 +1710,9 @@ function openSettings() {
     const tk = $('.s-tracker', m);
     tk.checked = c.trackerEnabled !== false;
     tk.onchange = () => set({ trackerEnabled: tk.checked });
+    const jk = $('.s-journal', m);
+    jk.checked = c.journalEnabled !== false;
+    jk.onchange = () => set({ journalEnabled: jk.checked });
 
     const ws = $('.s-ws', m);
     const we = $('.s-we', m);

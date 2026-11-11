@@ -12,6 +12,18 @@ let boardKind = 'all';
 let modal = null;
 try { mode = localStorage.getItem('tmode') || 'month'; } catch { /* ignore */ }
 
+// this page is both the pink "tracker" panel and the blue "journal" panel
+const PANEL = new URLSearchParams(location.search).get('panel') === 'journal' ? 'journal' : 'tracker';
+const IS_J = PANEL === 'journal';
+if (IS_J) mode = 'journal';
+else if (mode === 'journal') mode = 'month';
+const PANEL_NAME = IS_J ? 'יומן' : 'המעקב';
+const PANEL_ICON = IS_J ? 'heart' : 'flag';
+const myPinned = () => !!(S && (IS_J ? S.ui.journalPinned : S.ui.trackerPinned));
+const myExpanded = () => !!(S && (IS_J ? S.ui.journalExpanded : S.ui.trackerExpanded));
+document.body.classList.toggle('journal-body', IS_J);
+document.title = `הסרגל — ${PANEL_NAME}`;
+
 const body = document.body;
 const panel = $('#panel');
 const STATUSES = ['חדש', 'בטיפול', 'ממתין ללקוח', 'הושלם'];
@@ -32,7 +44,7 @@ api.on('ui:expanded', (v) => {
 });
 api.on('toast', (t) => toast(t.message, t.kind));
 $('#handle').addEventListener('click', () => api.call('ui:expand', { focus: true }));
-(async () => { const r = await api.call('state:get'); S = r.state; body.classList.toggle('expanded', !!S.ui.trackerExpanded); render(); })();
+(async () => { const r = await api.call('state:get'); S = r.state; body.classList.toggle('expanded', myExpanded()); render(); })();
 
 /* don't auto-close while typing / a dialog is open */
 let holdSent = null;
@@ -49,7 +61,7 @@ window.addEventListener('blur', updateHold);
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (modal) { closeModal(); return; }
-  if (!(S && S.ui.trackerPinned)) api.call('ui:collapse');
+  if (!myPinned()) api.call('ui:collapse');
 });
 
 /* ───────── time math ───────── */
@@ -155,7 +167,7 @@ function render() {
     view = v;
     closeModal();
     if (v === 'setup') {
-      panel.innerHTML = `<div class="lockview"><div class="hero">${LOGO}</div><h2>המעקב</h2><p class="muted">קודם מגדירים את הסרגל — הידית הסגולה.</p><button class="primary" data-a="open-sidebar">פתיחת הסרגל</button></div>`;
+      panel.innerHTML = `<div class="lockview"><div class="hero">${LOGO}</div><h2>${PANEL_NAME}</h2><p class="muted">קודם מגדירים את הסרגל — הידית הסגולה.</p><button class="primary" data-a="open-sidebar">פתיחת הסרגל</button></div>`;
     } else if (v === 'lock') {
       mountLock();
     } else {
@@ -174,8 +186,8 @@ panel.addEventListener('click', (e) => {
 function mountLock() {
   panel.innerHTML = `
     <div class="lockview">
-      <div class="hero trk-hero">${icon('flag')}</div>
-      <h2>המעקב נעול</h2>
+      <div class="hero trk-hero">${icon(PANEL_ICON)}</div>
+      <h2>${IS_J ? 'היומן' : 'המעקב'} נעול</h2>
       <p class="muted small">אותה סיסמה ראשית של הסרגל</p>
       <form class="unlock"><div class="pw-wrap big"><input type="password" id="pw" placeholder="סיסמה ראשית"><button type="submit" class="primary">${icon('unlock')} פתיחה</button></div></form>
       <div class="err"></div>
@@ -190,7 +202,7 @@ function mountLock() {
 function mountMain() {
   panel.innerHTML = `
     <header class="top">
-      <div class="brand"><span class="trk-logo">${icon('flag')}</span><span>המעקב</span></div>
+      <div class="brand"><span class="trk-logo">${icon(PANEL_ICON)}</span><span>${PANEL_NAME}</span></div>
       <button class="icon-btn" data-a="pin" title="נעיצה — יישאר פתוח">${icon('pin')}</button>
     </header>
     <div class="seg modes trk-modes">
@@ -198,13 +210,12 @@ function mountMain() {
       <button data-a="mode" data-m="checks">${icon('checklist')} צ'קליסט</button>
       <button data-a="mode" data-m="blocks">${icon('clock')} TIME BLOCKS</button>
       <button data-a="mode" data-m="jobs">${icon('briefcase')} עבודות</button>
-      <button data-a="mode" data-m="journal">${icon('heart')} יומן</button>
     </div>
     <main id="tv" class="list"></main>`;
 }
 
 function renderMain() {
-  $('[data-a="pin"]', panel).classList.toggle('on', !!S.ui.trackerPinned);
+  $('[data-a="pin"]', panel).classList.toggle('on', myPinned());
   $$('.trk-modes button', panel).forEach((b) => b.classList.toggle('on', b.dataset.m === mode));
   renderView();
 }
@@ -221,7 +232,7 @@ function renderView() {
 
 // live clock for a running block
 setInterval(() => {
-  if (view !== 'main' || !S || !S.ui.trackerExpanded) return;
+  if (view !== 'main' || !S || !myExpanded()) return;
   const a = T().active;
   if (a && a.sessionId) {
     const el = $('#run-clock');
@@ -548,7 +559,7 @@ function openJob(job) {
 async function onAction(act, a, e) {
   switch (act) {
     case 'open-sidebar': api.call('ui:openSidebar'); break;
-    case 'pin': api.call('ui:pin', { pinned: !S.ui.trackerPinned }); break;
+    case 'pin': api.call('ui:pin', { pinned: !myPinned() }); break;
     case 'mode':
       mode = a.dataset.m;
       try { localStorage.setItem('tmode', mode); } catch { /* ignore */ }
