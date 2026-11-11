@@ -11,6 +11,7 @@ const { Vault, VaultError } = require('./vault');
 const { Config, DEFAULTS } = require('./config');
 const launcher = require('./launcher');
 const { Activity, combine, stats, focusStreak, workday, dateKey } = require('./activity');
+const journal = require('./journal');
 
 if (process.env.SARGEL_USER_DATA) app.setPath('userData', process.env.SARGEL_USER_DATA);
 
@@ -554,6 +555,15 @@ function publicState() {
     blocks: p.data.tblocks.filter((x) => !x.deleted),
     subs: p.data.tsubs.filter((x) => !x.deleted),
     active: trkActive(p),
+    journal: {
+      books: p.data.books.filter((x) => !x.deleted),
+      readlog: p.data.readlog.filter((x) => !x.deleted).map((x) => x.date),
+      workouts: p.data.workouts.filter((x) => !x.deleted),
+      courses: p.data.courses.filter((x) => !x.deleted),
+      dates: p.data.jdates.filter((x) => !x.deleted),
+      quotes: p.data.quotes.filter((x) => !x.deleted),
+      settings: jSettings(p),
+    },
   } : null;
   return {
     platform: process.platform,
@@ -781,7 +791,7 @@ async function attachVault(which, v, password, remember) {
   watch(which);
   backupDaily(which);
   if (which === 'team') await setRememberedTeamPassword(remember ? password : null);
-  else { await migratePersonal(); await autoUnlockTeam(); syncActivityToVault(); fixRunning(); carryChecks(); }
+  else { await migratePersonal(); await autoUnlockTeam(); syncActivityToVault(); fixRunning(); carryChecks(); seedQuotes(); }
   broadcast();
 }
 
@@ -813,6 +823,7 @@ async function unlockPersonal(password) {
   syncActivityToVault();
   fixRunning();
   carryChecks();
+  seedQuotes();
   broadcast();
 }
 
@@ -1007,6 +1018,129 @@ function deleteNote({ id }) {
   const now = Date.now();
   v.data.notes = v.data.notes.map((x) => (x.id === id ? { id, deleted: true, updatedAt: now } : x));
   queueSave('personal');
+}
+
+/* ───────── journal tab: books, workouts, learning, dates, quotes ───────── */
+const J_LISTS = { books: 'books', workouts: 'workouts', courses: 'courses', jdates: 'jdates', quotes: 'quotes' };
+
+function jSettings(v) {
+  const d = v.data.jset.find((x) => x.id === 'jset' && !x.deleted);
+  return { ...journal.JSET_DEFAULT, ...(d || {}) };
+}
+
+function jSave({ list, doc }) {
+  const v = requireVault('personal');
+  if (list === 'jset') {
+    const clean = { id: 'jset', ...journal.CLEAN.jset({ ...jSettings(v), ...(doc || {}) }), updatedAt: Date.now() };
+    const i = v.data.jset.findIndex((x) => x.id === 'jset');
+    if (i >= 0) v.data.jset[i] = clean; else v.data.jset.push(clean);
+    queueSave('personal');
+    return { id: 'jset' };
+  }
+  if (!J_LISTS[list] || !doc || typeof doc !== 'object') throw new VaultError('BAD_INPUT');
+  const arr = v.data[list];
+  const now = Date.now();
+  const id = typeof doc.id === 'string' && doc.id ? doc.id.slice(0, 64) : journal.uid();
+  const i = arr.findIndex((x) => x.id === id);
+  const prev = i >= 0 && !arr[i].deleted ? arr[i] : null;
+  const clean = { id, ...journal.CLEAN[list]({ ...(prev || {}), ...doc }), createdAt: prev && prev.createdAt ? prev.createdAt : now, updatedAt: now };
+  if (list === 'quotes' && !clean.text) throw new VaultError('BAD_INPUT');
+  if (list === 'workouts' && !clean.date) clean.date = dateKey();
+  if (list === 'books') {
+    if (clean.status === 'reading' && !clean.startedAt) clean.startedAt = now;
+    if (clean.status === 'done' && !clean.finishedAt) { clean.finishedAt = now; if (clean.pages) clean.page = clean.pages; }
+    if (clean.status !== 'done') clean.finishedAt = 0;
+    // reading pages forward counts as reading today
+    if (prev && clean.page > (prev.page || 0)) logReading(v, clean.page - (prev.page || 0));
+  }
+  if (list === 'courses') {
+    if (!clean.startedAt) clean.startedAt = now;
+    // every course has its own TIME BLOCK, so ▶ counts time for it
+    if (!clean.blockId || !liveBlock(v, clean.blockId)) {
+      const b = { id: journal.uid(), name: `🎓 ${clean.title}`, done: false, doneAt: 0, createdAt: now, order: nextOrder(v.data.tblocks.filter((x) => !x.deleted)), updatedAt: now };
+      v.data.tblocks.push(b);
+      clean.blockId = b.id;
+    } else {
+      const b = liveBlock(v, clean.blockId);
+      if (b.name !== `🎓 ${clean.title}`) { b.name = `🎓 ${clean.title}`; b.updatedAt = now; }
+    }
+  }
+  if (i >= 0) arr[i] = clean; else arr.push(clean);
+  queueSave('personal');
+  return { id };
+}
+
+function jDelete({ list, id }) {
+  const v = requireVault('personal');
+  if (!J_LISTS[list]) throw new VaultError('BAD_INPUT');
+  const now = Date.now();
+  v.data[list] = v.data[list].map((x) => (x.id === id ? { id, deleted: true, updatedAt: now } : x));
+  queueSave('personal');
+}
+
+/** today's reading mark (keeps the daily reading streak) */
+function logReading(v, pages = 0) {
+  const k = dateKey();
+  const i = v.data.readlog.findIndex((x) => x.id === k);
+  const prev = i >= 0 && !v.data.readlog[i].deleted ? v.data.readlog[i] : null;
+  const doc = { id: k, date: k, pages: (prev ? prev.pages || 0 : 0) + Math.max(0, pages), updatedAt: Date.now() };
+  if (i >= 0) v.data.readlog[i] = doc; else v.data.readlog.push(doc);
+}
+
+function readToday({ bookId, page }) {
+  const v = requireVault('personal');
+  const b = bookId ? v.data.books.find((x) => x.id === bookId && !x.deleted) : null;
+  if (b && page != null && page !== '') {
+    const p = Math.round(Number(page));
+    if (Number.isFinite(p) && p > (b.page || 0)) {
+      logReading(v, p - (b.page || 0));
+      b.page = b.pages ? Math.min(p, b.pages) : p;
+      if (b.status === 'want') { b.status = 'reading'; b.startedAt = b.startedAt || Date.now(); }
+      if (b.pages && b.page >= b.pages) { b.status = 'done'; b.finishedAt = Date.now(); }
+      b.updatedAt = Date.now();
+    } else logReading(v, 0);
+  } else logReading(v, 0);
+  queueSave('personal');
+}
+
+function unreadToday() {
+  const v = requireVault('personal');
+  const k = dateKey();
+  v.data.readlog = v.data.readlog.map((x) => (x.id === k ? { id: k, deleted: true, updatedAt: Date.now() } : x));
+  queueSave('personal');
+}
+
+function seedQuotes() {
+  const v = vaults.personal;
+  if (!v || !v.unlocked) return;
+  const s = v.data.settings || {};
+  if (Array.isArray(s.migrations) && s.migrations.includes('quotes1')) return;
+  v.data.quotes.push(...journal.starterQuotes());
+  v.data.settings = { ...s, migrations: [...(s.migrations || []), 'quotes1'], updatedAt: Date.now() };
+  queueSave('personal');
+}
+
+/** reminders for important dates — any day of the week */
+function dateReminders() {
+  const v = vaults.personal;
+  if (!v || !v.unlocked || !activity) return;
+  const key = dateKey();
+  const h = new Date().getHours();
+  if (h < 8 || h >= 21) return;
+  for (const d of v.data.jdates) {
+    if (d.deleted) continue;
+    const { when, days } = journal.nextOccurrence(d);
+    const id = `jd:${d.id}:${dateKey(when)}:${days === 0 ? 0 : 1}`;
+    if ((days === 0 || days === d.remind) && !activity.wasNotified(key, id)) {
+      activity.setNotified(key, id);
+      showToast({
+        kind: 'date', quiet: false, ttl: 60000,
+        title: `${d.emoji || '📅'} ${d.title}`,
+        body: days === 0 ? 'היום!' : `בעוד ${days} ימים · ${when.getDate()}.${when.getMonth() + 1}`,
+      });
+      return; // one at a time
+    }
+  }
 }
 
 /* ───────── tracker panel: TIME BLOCKS, daily checklist, jobs & leads ───────── */
@@ -1490,6 +1624,7 @@ function dayForEdit({ date }) {
 function remindersTick() {
   if (!activity || !cfg) return;
   carryChecks();
+  dateReminders();
   const now = new Date();
   if (!(cfg.get('workDays') || []).includes(now.getDay())) return;
   const key = dateKey(now);
@@ -1756,6 +1891,10 @@ function registerIpc() {
   handle('quick:hide', () => hideQuick());
   handle('quick:show', () => showQuick());
 
+  handle('j:save', (a) => jSave(a));
+  handle('j:delete', (a) => jDelete(a));
+  handle('j:readToday', (a) => readToday(a));
+  handle('j:unreadToday', () => unreadToday());
   handle('ui:openSidebar', () => setExpanded(true, { explicit: true, focus: true }, 'sidebar'));
   handle('trk:start', (a) => startBlock(a));
   handle('trk:pause', () => pauseBlock());

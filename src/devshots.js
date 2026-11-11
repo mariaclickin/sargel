@@ -24,81 +24,73 @@ module.exports = async function devShots(ctx) {
   };
   const js = (win, code) => win.webContents.executeJavaScript(`{ ${code} }`, true);
   const id = () => crypto.randomUUID();
-  const H = (h, m = 0) => h * 60 + m;
+  const back = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return dateKey(d); };
 
   try {
     await wait(1800);
-    const sb = ctx.sidebar();
+    const tr = ctx.tracker();
     const vdir = path.join(dir, 'vault');
     fs.rmSync(vdir, { recursive: true, force: true });
     await ctx.createVault('personal', vdir, 'test-pass-123', false);
     await wait(500);
+    const v = ctx.vaults.personal;
+    const now = Date.now();
 
-    // this week's activity (Sun..today): early arrival today, overtime Sunday, a long evening on Monday
-    const act = ctx.activity();
-    const now = new Date();
-    const nowMin = now.getHours() * 60 + now.getMinutes();
-    const setDay = (date, parts) => {
-      const d = act.day(dateKey(date));
-      const a = '.'.repeat(1440).split('');
-      for (const [f, t, ch] of parts) for (let i = f; i < t; i++) a[i] = ch;
-      d.line = a.join('');
-      act.touch(d);
-    };
-    const back = (n) => { const d = new Date(now); d.setDate(now.getDate() - n); return d; };
-    const dow = now.getDay();
-    if (dow >= 1) setDay(back(dow), [[H(8, 50), H(12, 30), 'w'], [H(12, 30), H(13), 'b'], [H(13), H(17, 45), 'w']]); // Sunday: 8:55 → overtime
-    if (dow >= 2) setDay(back(dow - 1), [[H(9), H(19, 40), 'w']]); // Monday: computer left on — fixed manually below
-    const cap = (m) => Math.min(m, nowMin);
-    setDay(now, [[H(8, 30), cap(H(9, 55)), 'w'], [cap(H(9, 55)), cap(H(10)), 'b'], [cap(H(10)), cap(H(12)), 'w'], [cap(H(12)), cap(H(12, 27)), 'b'], [cap(H(12, 27)), cap(H(15)), 'w']]);
-    act.day(dateKey(now)).water = 2;
+    // reading: every day for the last 23 days except one (→ frozen), not yet today
+    for (let i = 1; i <= 23; i++) if (i !== 6) v.data.readlog.push({ id: back(i), date: back(i), pages: 10, updatedAt: now });
+    v.data.books.push(
+      { id: id(), title: 'הרגלים אטומיים', author: 'ג׳יימס קליר', status: 'reading', pages: 320, page: 142, rating: 0, color: 'pink', startedAt: now - 20 * 864e5, finishedAt: 0, createdAt: now, updatedAt: now },
+      { id: id(), title: 'Deep Work', author: 'Cal Newport', status: 'want', pages: 300, page: 0, rating: 0, color: 'blue', startedAt: 0, finishedAt: 0, createdAt: now, updatedAt: now - 1 },
+      { id: id(), title: 'הארי פוטר', author: '', status: 'done', pages: 400, page: 400, rating: 5, color: 'amber', startedAt: now - 90 * 864e5, finishedAt: now - 30 * 864e5, createdAt: now, updatedAt: now - 2 },
+    );
+    // workouts: 3+ a week for the past weeks, 2 this week
+    const types = ['פילאטיס', 'הליכה', 'חדר כושר'];
+    const dow = new Date().getDay();
+    for (let w = 1; w <= 7; w++) for (let k = 0; k < (w === 3 ? 1 : 3); k++) v.data.workouts.push({ id: id(), date: back(dow + 7 * (w - 1) + 1 + k * 2), type: types[(w + k) % 3], minutes: 45, createdAt: now, updatedAt: now });
+    if (dow >= 1) v.data.workouts.push({ id: id(), date: back(0), type: 'פילאטיס', minutes: 50, createdAt: now, updatedAt: now });
+    v.data.workouts.push({ id: id(), date: back(Math.min(dow, 1)), type: 'הליכה', minutes: 30, createdAt: now, updatedAt: now });
+    // learning: a course with its own block + 1:20 this week
+    const blk = { id: id(), name: '🎓 קורס פיגמה', done: false, doneAt: 0, createdAt: now, order: 0, updatedAt: now };
+    v.data.tblocks.push(blk);
+    v.data.sessions.push({ id: id(), name: blk.name, blockId: blk.id, subId: '', start: now - 3 * 3600e3, end: now - 3 * 3600e3 + 80 * 60e3, updatedAt: now });
+    v.data.courses.push({ id: id(), title: 'קורס פיגמה', kind: 'course', total: 20, done: 7, current: 'Auto Layout', blockId: blk.id, status: 'active', color: 'purple', startedAt: now - 25 * 864e5, createdAt: now, updatedAt: now });
+    // dates
+    const md = (n) => { const d = new Date(now + n * 864e5); return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+    v.data.jdates.push(
+      { id: id(), title: 'יום הולדת לאמא', emoji: '🎂', md: md(6), year: '', yearly: true, remind: 2, createdAt: now, updatedAt: now },
+      { id: id(), title: 'חידוש ביטוח רכב', emoji: '🚗', md: md(23), year: '', yearly: true, remind: 7, createdAt: now, updatedAt: now },
+      { id: id(), title: 'רופא שיניים', emoji: '🦷', md: md(1), year: String(new Date(now + 864e5).getFullYear()), yearly: false, remind: 1, createdAt: now, updatedAt: now },
+    );
+    await v.save();
+    ctx.lockAll();
+    await ctx.unlockPersonal('test-pass-123'); // seeds the 30 starter quotes
+    await wait(500);
+    log(`quotes after unlock: ${v.data.quotes.length} (starter: ${v.data.quotes.filter((q) => q.starter).length})`);
 
-    // a manual fix for Monday and a vacation for tomorrow (or Tuesday)
-    const v = ctx.vaults.personal.data;
-    if (dow >= 2) v.dayfix.push({ id: dateKey(back(dow - 1)), date: dateKey(back(dow - 1)), type: 'work', arrive: '09:00', leave: '17:00', breaks: null, note: 'המחשב נשאר פתוח', updatedAt: Date.now() });
-    const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1);
-    v.dayfix.push({ id: dateKey(tomorrow), date: dateKey(tomorrow), type: 'vac', arrive: '', leave: '', breaks: null, note: '', updatedAt: Date.now() });
-
-    // notes for the drag test
-    const mk = (title, color, pinned, createdAt) => ({ id: id(), title, text: '', checklist: false, checks: [], color, pinned, createdAt, updatedAt: createdAt });
-    v.notes.push(mk('להיום', 'amber', true, 5), mk('רעיון לפוסט', 'blue', false, 4), mk('טלפון מהיר', 'green', false, 3), mk('לזכור', 'pink', false, 2), mk('וויפי משרד', '', false, 1));
-    ctx.broadcast();
-
-    ctx.state.pinned = true;
-    ctx.setExpanded(true, { explicit: true });
+    ctx.setExpanded(true, { explicit: true }, 'tracker');
+    ctx.tstate.pinned = true;
     await wait(700);
-    await js(sb, `document.querySelector('[data-action="mode"][data-mode="day"]').click()`);
-    await wait(900);
-    await snap(sb, '01-my-day');
-    const sum = (await ctx.activitySummary());
-    log(`today total=${sum.today.workday.total} early=${sum.today.workday.early} overtime=${sum.today.workday.overtime} focus=${sum.today.focus.len}`);
-    log(`week: ${sum.week.map((d) => `${d.dow}:${d.total}${d.off ? `(${d.off})` : ''}${d.fixed ? '✎' : ''}`).join(' ')} | weekTotal=${sum.weekTotal}/${sum.weekTarget} monthOver=${sum.monthOver}`);
-
-    await js(sb, `document.querySelector('.day-track').scrollIntoView(); document.getElementById('day').scrollTop = 9999`);
-    await wait(300);
-    await snap(sb, '02-my-day-week');
-
-    await js(sb, `document.querySelectorAll('.wk2')[${dow >= 1 ? 1 : 0}].click()`);
-    await wait(700);
-    await snap(sb, '03-day-edit');
-    await js(sb, `document.querySelector('.m-cancel').click()`);
-
-    // notes: move "וויפי משרד" (last) onto "רעיון לפוסט" (first regular)
-    await js(sb, `document.querySelector('[data-action="mode"][data-mode="notes"]').click()`);
+    await js(tr, `document.querySelector('[data-a="mode"][data-m="journal"]').click()`);
     await wait(400);
-    const order = () => ctx.vaults.personal.data.notes.filter((n) => !n.deleted && !n.pinned).sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map((n) => n.title).join(' > ');
-    await js(sb, `
-      const ns = [...document.querySelectorAll('.note')];
-      const src = ns.find((n) => n.textContent.includes('וויפי'));
-      const dst = ns.find((n) => n.textContent.includes('רעיון'));
-      const dt = new DataTransfer();
-      src.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
-      dst.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
-      dst.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
-      src.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));`);
+    for (const m of ['books', 'workouts', 'learning', 'dates', 'quotes']) {
+      await js(tr, `document.querySelector('[data-a="jmode"][data-m="${m}"]').click()`);
+      await wait(450);
+      await snap(tr, `j-${m}`);
+    }
+    // read today through the UI → streak goes up
+    await js(tr, `document.querySelector('[data-a="jmode"][data-m="books"]').click()`);
+    await wait(300);
+    await js(tr, `document.querySelector('[data-a="j-readtoday"]').click()`);
     await wait(700);
-    log(`notes after drag: ${order()}`);
-    await snap(sb, '04-notes-after-drag');
+    await snap(tr, 'j-books-after-read');
+    log(`read today logged: ${v.data.readlog.some((r) => r.date === dateKey() && !r.deleted)}`);
+    // a quote from a book
+    await js(tr, `document.querySelector('[data-a="j-quote-book"]').click()`);
+    await wait(400);
+    await js(tr, `document.querySelector('.q-t').value = 'אתה לא עולה לרמת המטרות שלך, אתה יורד לרמת המערכות שלך.'; document.querySelector('.q-p').value = '27'; document.querySelector('.m-save').click()`);
+    await wait(600);
+    const bq = v.data.quotes.find((q) => q.bookId);
+    log(`book quote: ${bq ? `${bq.source} | ${bq.category}` : 'missing'}`);
     log('ok');
   } catch (e) {
     log(`error: ${e && e.stack}`);

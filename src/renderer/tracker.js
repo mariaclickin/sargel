@@ -27,6 +27,7 @@ api.on('state', (s) => { S = s; render(); });
 api.on('ui:expanded', (v) => {
   body.classList.toggle('expanded', v);
   if (v && view === 'lock') setTimeout(() => $('#pw') && $('#pw').focus(), 30);
+  if (v && typeof onJournalOpen === 'function') onJournalOpen();
   if (v && view === 'main') renderView();
 });
 api.on('toast', (t) => toast(t.message, t.kind));
@@ -197,6 +198,7 @@ function mountMain() {
       <button data-a="mode" data-m="checks">${icon('checklist')} צ'קליסט</button>
       <button data-a="mode" data-m="blocks">${icon('clock')} TIME BLOCKS</button>
       <button data-a="mode" data-m="jobs">${icon('briefcase')} עבודות</button>
+      <button data-a="mode" data-m="journal">${icon('heart')} יומן</button>
     </div>
     <main id="tv" class="list"></main>`;
 }
@@ -213,6 +215,7 @@ function renderView() {
   if (mode === 'month') renderMonth();
   else if (mode === 'checks') renderChecks();
   else if (mode === 'blocks') renderBlocks();
+  else if (mode === 'journal' && typeof renderJournal === 'function') renderJournal();
   else renderJobs();
 }
 
@@ -595,7 +598,7 @@ async function onAction(act, a, e) {
     case 'kind': boardKind = a.dataset.k; renderView(); break;
     case 'job-new': openJob(null); break;
     case 'job-open': openJob(T().jobs.find((j) => j.id === a.dataset.id)); break;
-    default: break;
+    default: if (typeof journalAction === 'function') await journalAction(act, a, e); break;
   }
 }
 
