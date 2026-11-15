@@ -18,6 +18,8 @@ const DEFAULTS = {
   workDays: [0, 1, 2, 3, 4], // Sunday..Thursday
   trackEnabled: true,
   breakMinutes: 10,
+  avgWork: true, // "My day": average work per day under the week chart
+  avgBreaks: true, // ... and average breaks per day
   hourlyNotify: true,
   waterReminder: true,
   waterMinutes: 60,

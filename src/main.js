@@ -530,7 +530,7 @@ function applyConfig(patch) {
   if (hm.test(patch.workStart || '')) clean.workStart = patch.workStart;
   if (hm.test(patch.workEnd || '')) clean.workEnd = patch.workEnd;
   if (Array.isArray(patch.workDays)) clean.workDays = [...new Set(patch.workDays.map(Number).filter((d) => d >= 0 && d <= 6))].sort();
-  for (const k of ['trackEnabled', 'hourlyNotify', 'waterReminder', 'trackerEnabled', 'journalEnabled']) if (k in patch) clean[k] = !!patch[k];
+  for (const k of ['trackEnabled', 'hourlyNotify', 'waterReminder', 'trackerEnabled', 'journalEnabled', 'avgWork', 'avgBreaks']) if (k in patch) clean[k] = !!patch[k];
   if ('breakMinutes' in patch) clean.breakMinutes = Math.round(clamp(patch.breakMinutes, 3, 60));
   if ('waterMinutes' in patch) clean.waterMinutes = Math.round(clamp(patch.waterMinutes, 15, 240));
   if ('waterGoal' in patch) clean.waterGoal = Math.round(clamp(patch.waterGoal, 1, 20));
@@ -1593,7 +1593,8 @@ function clearDayFix({ date }) {
   queueSave('personal');
 }
 
-function activitySummary() {
+const MAX_WEEKS_BACK = 16;
+function activitySummary({ weekOffset = 0 } = {}) {
   const breakMin = cfg.get('breakMinutes');
   const ws = hm(cfg.get('workStart'));
   const we = hm(cfg.get('workEnd'));
@@ -1610,18 +1611,27 @@ function activitySummary() {
   };
 
   const t = dayInfo(todayKey);
-  const week = [];
-  const start = new Date(now);
-  start.setDate(now.getDate() - now.getDay()); // Sunday
-  let weekTotal = 0;
-  for (let i = 0; i < 7; i++) {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
-    const k = dateKey(d);
-    const { dv, fix, wd } = dayInfo(k);
-    if (k <= todayKey) weekTotal += wd.total;
-    week.push({ date: k, dow: i, future: k > todayKey, workday: workDays.includes(i), total: wd.total, overtime: wd.overtime, off: wd.off, fixed: !!fix && !wd.off, water: dv.water });
-  }
+  // weekOffset 0 = this week, 1 = last week, ... (local history goes back ~4 months)
+  const off = Math.round(clamp(weekOffset, 0, MAX_WEEKS_BACK));
+  const buildWeek = (o) => {
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay() - o * 7); // Sunday
+    const days = [];
+    let total = 0;
+    for (let i = 0; i < 7; i++) {
+      const k = dateKey(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
+      const { dv, fix, wd } = k === todayKey ? t : dayInfo(k);
+      if (k <= todayKey) total += wd.total;
+      days.push({ date: k, dow: i, future: k > todayKey, workday: workDays.includes(i), total: wd.total, overtime: wd.overtime, breaks: wd.breakMinutes || 0, off: wd.off, fixed: !!fix && !wd.off, water: dv.water });
+    }
+    return { days, total };
+  };
+  const cur = buildWeek(0);
+  const week = off ? buildWeek(off).days : cur.days;
+  const weekTotal = cur.total;
+  // per-day averages: only days that were worked and are over (no vacation / sick / empty days, not today)
+  const counted = week.filter((d) => !d.off && d.total > 0 && d.date < todayKey);
+  const avg = (f) => (counted.length ? Math.round(counted.reduce((a, d) => a + f(d), 0) / counted.length) : null);
+  const weekAvg = { days: counted.length, work: avg((d) => d.total), breaks: avg((d) => d.breaks) };
   // overtime this month (days up to today)
   let monthOver = 0;
   const m0 = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -1643,6 +1653,9 @@ function activitySummary() {
       fix: t.fix,
     },
     week,
+    weekOffset: off,
+    weekMax: MAX_WEEKS_BACK,
+    weekAvg,
     weekTotal,
     weekTarget: workDays.length * target,
     monthOver,
@@ -1958,7 +1971,7 @@ function registerIpc() {
   handle('trk:jobSave', (a) => saveJob(a));
   handle('trk:jobDelete', (a) => deleteJob(a));
 
-  handle('activity:get', () => ({ summary: activitySummary() }));
+  handle('activity:get', ({ weekOffset }) => ({ summary: activitySummary({ weekOffset }) }));
   handle('activity:day', (a) => dayForEdit(a));
   handle('activity:fix', (a) => saveDayFix(a));
   handle('activity:unfix', (a) => clearDayFix(a));

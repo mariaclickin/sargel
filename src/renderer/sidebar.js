@@ -391,6 +391,7 @@ try { mode = localStorage.getItem('mode') || 'items'; } catch { /* ignore */ }
 
 function setMode(m) {
   mode = m;
+  if (m === 'day') weekOffset = 0;
   try { localStorage.setItem('mode', m); } catch { /* ignore */ }
   renderMode();
 }
@@ -574,10 +575,12 @@ async function toggleNoteCheck(nid, cid) {
 
 /* my day */
 let daySummary = null;
+let weekOffset = 0; // 0 = this week, 1 = last week, ...
+const dm = (key) => { const [, m, d] = key.split('-').map(Number); return `${d}.${m}`; };
 async function renderDay() {
   const box = $('#day');
   if (!box) return;
-  const r = await api.call('activity:get');
+  const r = await api.call('activity:get', { weekOffset });
   if (!r.ok) return;
   daySummary = r.summary;
   const s = daySummary;
@@ -634,6 +637,11 @@ async function renderDay() {
       </button>`;
   }).join('');
 
+  // which per-day averages to show under the week (chosen in settings)
+  const avgs = [];
+  if (c.avgWork !== false) avgs.push(['ממוצע עבודה ליום', s.weekAvg.work]);
+  if (c.avgBreaks !== false) avgs.push(['ממוצע הפסקות ליום', s.weekAvg.breaks]);
+
   box.innerHTML = `
     <div class="day-track ${s.enabled ? '' : 'off'}">
       <span>${icon('clock')} מעקב שעות: <b>${s.enabled ? 'פועל' : 'כבוי'}</b></span>
@@ -664,8 +672,14 @@ async function renderDay() {
     <div class="sec-t">${icon('droplet')} מים היום <span class="muted">${s.today.water} / ${goal} כוסות</span></div>
     <div class="cups">${Array.from({ length: Math.max(goal, s.today.water) }, (_, i) => `<span class="cup ${i < s.today.water ? 'full' : ''}"></span>`).join('')}</div>
     <div class="btns"><button class="ghost sm" data-action="water" data-d="1">${icon('plus')} שתיתי כוס</button>${s.today.water ? `<button class="ghost sm" data-action="water" data-d="-1">${icon('minus')} ביטול</button>` : ''}</div>
-    <div class="sec-t">השבוע <span class="muted">· לחיצה על יום = תיקון / חופש / מחלה</span></div>
+    <div class="sec-t">${s.weekOffset ? `שבוע <span class="wk-range">${dm(s.week[0].date)}–${dm(s.week[6].date)}</span>` : 'השבוע'}
+      <span class="wk-nav">
+        <button class="icon-btn sm" data-action="week" data-w="${s.weekOffset + 1}" title="שבוע קודם" ${s.weekOffset >= s.weekMax ? 'disabled' : ''}>${icon('chevR')}</button>
+        <button class="icon-btn sm" data-action="week" data-w="${s.weekOffset - 1}" title="שבוע הבא" ${s.weekOffset ? '' : 'disabled'}>${icon('chevL')}</button>
+      </span></div>
     <div class="week2">${weekHTML}</div>
+    ${avgs.length ? `<div class="wk-avg">${avgs.map(([label, v]) => `<div><span>${label}</span><b>${v != null ? fmtMin(v) : '—'}</b></div>`).join('')}</div>` : ''}
+    <div class="wk-avg-n">${avgs.length ? (s.weekAvg.days ? `לפי ${s.weekAvg.days} ימי עבודה${s.weekOffset ? '' : ' (בלי היום)'} · ` : `${s.weekOffset ? 'אין ימי עבודה בשבוע הזה' : 'עוד אין יום עבודה שלם השבוע'} · `) : ''}לחיצה על יום = תיקון / חופש / מחלה</div>
     <div class="tl-legend wk2-legend"><span><i class="lg-w"></i>עבודה</span><span><i class="lg-ot"></i>שעות נוספות</span><span><i class="lg-vac"></i>חופש</span><span><i class="lg-sick"></i>מחלה</span><span>✎ תוקן ידנית</span></div>`;
 }
 
@@ -959,6 +973,7 @@ async function onPanelClick(e) {
     case 'add-item': openItemEditor(null); break;
     case 'mode': setMode(a.dataset.mode); break;
     case 'day-edit': e.stopPropagation(); openDayEdit(a.dataset.date); break;
+    case 'week': if (!a.disabled) { weekOffset = Math.max(0, Number(a.dataset.w) || 0); renderDay(); } break;
     case 'toggle-done': {
       e.stopPropagation();
       const r = await api.call('data:toggleDone', { vault: item.vault, id: item.id });
@@ -1643,6 +1658,9 @@ function openSettings() {
       <h4>${icon('clock')} מעקב שעות</h4>
       <label class="check"><input type="checkbox" class="s-track"><span>מעקב שעות פועל <small>נמדד רק אם יש פעילות עכבר/מקלדת — לא אילו תוכנות או אתרים</small></span></label>
       <div class="set-row"><span>הפסקה אחרי</span><select class="s-break"><option value="5">5 דקות בלי פעילות</option><option value="10">10 דקות בלי פעילות</option><option value="15">15 דקות בלי פעילות</option></select></div>
+      <div class="lbl-t" style="margin:6px 0 4px">מתחת לגרף השבוע</div>
+      <label class="check"><input type="checkbox" class="s-avgw"><span>ממוצע עבודה ליום</span></label>
+      <label class="check"><input type="checkbox" class="s-avgb"><span>ממוצע הפסקות ליום</span></label>
       <div class="btns"><button class="ghost" data-s="clear-activity">${icon('x')} מחיקת היסטוריית שעות</button></div>
     </div>
 
@@ -1736,6 +1754,11 @@ function openSettings() {
     bindCheck('.s-hourly', 'hourlyNotify');
     bindCheck('.s-water', 'waterReminder');
     bindCheck('.s-track', 'trackEnabled');
+    for (const [sel, key] of [['.s-avgw', 'avgWork'], ['.s-avgb', 'avgBreaks']]) {
+      const el = $(sel, m);
+      el.checked = c[key] !== false;
+      el.onchange = async () => { await set({ [key]: el.checked }); renderDay(); };
+    }
     const bindSel = (sel, key) => { const el = $(sel, m); el.value = String(c[key]); el.onchange = () => set({ [key]: Number(el.value) }); };
     bindSel('.s-wm', 'waterMinutes');
     bindSel('.s-wg', 'waterGoal');

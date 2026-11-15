@@ -542,6 +542,15 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent) !importa
 .wk2.today span { color: var(--text); font-weight: 700; }
 .wk2.fut .wk2-col { background: transparent; border: 1px dashed var(--line); }
 .wk2-legend { margin-top: 8px; }
+/* week paging + per-day averages */
+.wk-nav { margin-inline-start: auto; display: flex; align-items: center; gap: 2px; }
+.wk-nav .icon-btn:disabled { opacity: .3; cursor: default; background: none; }
+.wk-range { color: var(--text); direction: ltr; unicode-bidi: isolate; }
+.wk-avg { display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 6px; margin: 10px 4px 2px; }
+.wk-avg div { background: var(--panel-2); border-radius: 11px; padding: 7px 10px; display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.wk-avg span { font-size: 11.5px; color: var(--muted); }
+.wk-avg b { font-size: 15px; }
+.wk-avg-n { font-size: 11px; color: var(--faint); margin: 2px 4px 0; }
 .de-type { margin-bottom: 12px; }
 .de-prev { background: var(--panel-2); border-radius: 10px; padding: 9px 11px; font-size: 13px; margin-top: 4px; }
 .de-work .set-row select { min-width: 170px; }
