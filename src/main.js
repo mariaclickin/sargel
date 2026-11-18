@@ -19,7 +19,7 @@ const isMac = process.platform === 'darwin';
 const ASSETS = path.join(__dirname, '..', 'assets');
 const RENDERER = path.join(__dirname, 'renderer');
 // the edge handle window (a bit wider than the visible strip, so it's easy to hover); slimmer on Mac
-const HANDLE = isMac ? { w: 14, h: 72 } : { w: 22, h: 104 };
+const HANDLE = isMac ? { w: 12, h: 56 } : { w: 22, h: 104 };
 const FILE_NAMES = { personal: 'sargel-personal.sargel', team: 'sargel-team.sargel' };
 const MIN_PASSWORD = 8;
 
@@ -105,7 +105,7 @@ function collapsedBounds(kind = 'sidebar') {
   // the pink handle sits right below the purple one, the blue one below the pink (or above, if there's no room)
   const steps = kind === 'tracker' ? 1 : kind === 'journal' ? 2 : 0;
   if (steps) {
-    const gap = HANDLE.h + (isMac ? 8 : 10);
+    const gap = HANDLE.h + (isMac ? 6 : 10);
     const below = y + steps * gap;
     y = below + HANDLE.h <= wa.y + wa.height ? below : y - steps * gap;
   }

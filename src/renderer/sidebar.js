@@ -657,7 +657,9 @@ async function renderDay() {
   box.innerHTML = `
     <div class="day-track ${s.enabled ? '' : 'off'}">
       <span>${icon('clock')} מעקב שעות: <b>${s.enabled ? 'פועל' : 'כבוי'}</b></span>
-      <button class="place-btn" data-action="place" title="${home ? 'המחשב הזה נספר כעבודה מהבית — לחיצה: משרד' : 'המחשב הזה נספר כמשרד — לחיצה: בית'}">${icon(home ? 'home' : 'office')} ${home ? 'בית' : 'משרד'}</button>
+      <button class="ptog" data-action="place" title="איפה המחשב הזה נספר — לחיצה מחליפה">
+        <span class="side ${home ? '' : 'on'}">${icon('office')}משרד</span><i class="sw ${home ? 'home' : ''}"></i><span class="side ${home ? 'on' : ''}">${icon('home')}בית</span>
+      </button>
     </div>
     ${s.enabled ? '' : `<p class="muted small center">כשהמעקב כבוי לא נרשם דבר. מפעילים אותו בהגדרות ← מעקב שעות.</p>`}
     ${wd.off ? `
@@ -784,15 +786,31 @@ function renderMain() {
   renderMode();
 }
 
+/* shortcut buttons: one row, the rest behind "+N עוד" (opened state remembered on this computer) */
+let launchOpen = false;
+try { launchOpen = localStorage.getItem('launchOpen') === '1'; } catch { /* ignore */ }
 function renderLaunch() {
+  const box = $('#launch');
   const ls = S.data.launchers;
-  $('#launch').innerHTML = ls.map((l) => `
+  const tile = (l) => `
     <button class="lbtn" data-action="launch" data-lid="${l.id}" title="${esc(l.title)}${l.key ? ` · ${esc(S.launcherHotkeyLabel)} ואז ${l.key}` : ''} · קליק ימני לעריכה">
       <span class="ltile" ${tileStyle(l.color)}>${icon(l.icon || 'bolt')}${l.key ? `<span class="lkey">${l.key}</span>` : ''}</span>
       <span class="lname">${esc(l.title)}</span>
-    </button>`).join('')
-    + `<button class="lbtn add" data-action="add-launch" title="כפתור חדש"><span class="ltile">${icon('plus')}</span><span class="lname">הוספה</span></button>`;
+    </button>`;
+  const add = `<button class="lbtn add" data-action="add-launch" title="כפתור חדש"><span class="ltile">${icon('plus')}</span><span class="lname">הוספה</span></button>`;
+  // how many 54px buttons (+4px gap) fit in one row
+  const perRow = Math.max(3, Math.floor(((box.clientWidth || 360) - 24 + 4) / 58));
+  if (ls.length + 1 <= perRow) { box.innerHTML = ls.map(tile).join('') + add; return; }
+  if (launchOpen) {
+    box.innerHTML = ls.map(tile).join('') + add
+      + `<button class="lbtn more" data-action="launch-more" title="להציג שורה אחת"><span class="ltile">${icon('chevron')}</span><span class="lname">פחות</span></button>`;
+    return;
+  }
+  const shown = perRow - 1;
+  box.innerHTML = ls.slice(0, shown).map(tile).join('')
+    + `<button class="lbtn more" data-action="launch-more" title="להציג את כל הקיצורים"><span class="ltile" dir="ltr">+${ls.length - shown}</span><span class="lname">עוד</span></button>`;
 }
+window.addEventListener('resize', () => { if (view === 'main') renderLaunch(); });
 
 async function runLaunch(id, el) {
   const r = await api.call('launch:run', { id });
@@ -1007,6 +1025,11 @@ async function onPanelClick(e) {
     case 'cfilter': colorFilter = a.dataset.c === colorFilter ? null : (a.dataset.c || null); renderList(); break;
     case 'launch': runLaunch(a.dataset.lid, a.querySelector('.ltile')); break;
     case 'add-launch': openLauncherEditor(null); break;
+    case 'launch-more':
+      launchOpen = !launchOpen;
+      try { localStorage.setItem('launchOpen', launchOpen ? '1' : '0'); } catch { /* ignore */ }
+      renderLaunch();
+      break;
     case 'keyboard': openKeyboard(); break;
     case 'pin': api.call('ui:pin', { pinned: !S.ui.pinned }); break;
     case 'lock': api.call('vault:lock'); break;

@@ -1,5 +1,5 @@
 'use strict';
-/* Development only — scripted check of office / home counting, the handles settings and the slimmer Mac handles. Not packaged. */
+/* Development only — scripted check of the office / home switch, the one-row shortcuts and the flat Mac handles. Not packaged. */
 const fs = require('fs');
 const path = require('path');
 
@@ -29,6 +29,10 @@ module.exports = async function devShots(ctx) {
     fs.rmSync(vdir, { recursive: true, force: true });
     await ctx.createVault('personal', vdir, 'test-pass-123', false);
 
+    for (let i = 0; i < 11; i++) ctx.trk.saveLauncher({ launcher: { type: 'web', title: `קיצור ${i + 1}`, url: 'https://example.com', icon: 'globe', color: ['blue', 'pink', 'green', 'amber'][i % 4], key: String((i % 9) + 1) } });
+    ctx.broadcast();
+    await wait(300);
+
     // today: 2h in the morning, a 3h break, then work again until now
     const act = ctx.activity();
     const now = new Date();
@@ -43,11 +47,19 @@ module.exports = async function devShots(ctx) {
     await wait(900);
     log(`office tiles: ${await text(sb, '.stats')}`);
     log(`office banner: ${await text(sb, '#workday')}`);
+    log(`shortcuts collapsed: ${await js(sb, `document.querySelectorAll('#launch .lbtn').length + ' buttons, last: ' + document.querySelector('#launch .lbtn:last-child').textContent.replace(/\s+/g, ' ').trim()`)}`);
+    log(`switch: ${await text(sb, '.ptog')}`);
     await snap(sb, '01-office');
+    await js(sb, `document.querySelector('[data-action="launch-more"]').click()`);
+    await wait(400);
+    log(`shortcuts open: ${await js(sb, `document.querySelectorAll('#launch .lbtn').length + ' buttons'`)}`);
+    await snap(sb, '01b-shortcuts-open');
+    await js(sb, `document.querySelector('[data-action="launch-more"]').click()`);
+    await wait(400);
 
     await js(sb, `document.querySelector('[data-action="place"]').click()`);
     await wait(1200);
-    log(`after click, button: ${await text(sb, '[data-action="place"]')} · config: ${ctx.cfg().get('workPlace')}`);
+    log(`after click, switch: ${await text(sb, '.ptog .side.on')} · config: ${ctx.cfg().get('workPlace')}`);
     log(`home tiles: ${await text(sb, '.stats')}`);
     log(`home banner: ${await text(sb, '#workday')}`);
     log(`today place on disk: ${act.day(key(now)).place}`);
@@ -67,7 +79,7 @@ module.exports = async function devShots(ctx) {
     // back to office for the next run
     await js(sb, `document.querySelector('[data-action="place"]').click()`);
     await wait(800);
-    log(`back: ${await text(sb, '[data-action="place"]')}`);
+    log(`back: ${await text(sb, '.ptog .side.on')}`);
 
     // what the slimmer Mac handle looks like (class only — the window size is set on a real Mac)
     ctx.setExpanded(false, {}, 'sidebar');

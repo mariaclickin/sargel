@@ -86,10 +86,10 @@ kbd {
 body.side-left .handle { right: auto; left: 0; border-radius: 0 12px 12px 0; box-shadow: 2px 0 10px rgba(80, 40, 200, .35); }
 body.locked .handle { filter: saturate(.35) brightness(.95); }
 body.expanded .handle { display: none; }
-/* Mac: slimmer handles (the window around them is smaller too — see HANDLE in main.js) */
-html.mac .handle { width: 8px; border-radius: 8px 0 0 8px; }
-html.mac .handle::before { width: 2px; height: 22px; }
-html.mac body.side-left .handle { border-radius: 0 8px 8px 0; }
+/* Mac: flat, thin handles — no grip line, no shadow (the window around them is smaller too — see HANDLE in main.js) */
+html.mac .handle { width: 5px; border-radius: 4px 0 0 4px; box-shadow: none !important; opacity: .92; }
+html.mac .handle::before { display: none; }
+html.mac body.side-left .handle { border-radius: 0 4px 4px 0; }
 
 /* ─────────────── panel ─────────────── */
 .panel {
@@ -362,6 +362,9 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent) !importa
 .ltile { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; position: relative; background: var(--panel-2); color: var(--muted); }
 .ltile .ic { width: 19px; height: 19px; }
 .lbtn.add .ltile { border: 1.5px dashed var(--line); background: none; }
+.lbtn.more .ltile { background: var(--accent-soft); color: var(--accent-text); font-weight: 700; font-size: 13px; }
+.lbtn.more .lname { color: var(--accent-text); }
+.lbtn.more .ltile .ic { transform: rotate(180deg); }
 .lkey { position: absolute; bottom: -4px; left: -4px; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 5px; font-size: 10px; font-weight: 700; line-height: 15px; background: var(--panel); color: var(--text); border: 1px solid var(--line); direction: ltr; }
 .lname { font-size: 11px; color: var(--muted); max-width: 54px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -518,8 +521,15 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent) !importa
 .stats4 .stat, .stats3 .stat { padding: 7px 8px; }
 .stats3 .stat b { font-size: 17px; }
 .stats3 .stat span { font-size: 10.5px; line-height: 1.3; }
-/* this computer counts as office / home — one button, a click flips it */
-.place-btn { border: 1px solid var(--line); background: var(--panel); border-radius: 10px; height: 30px; padding: 0 11px; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 650; cursor: pointer; color: var(--accent-text); flex: none; }
+/* this computer counts as office / home — one switch: office on one side, home on the other */
+.ptog { border: 0; background: none; padding: 2px 0; display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 650; cursor: pointer; flex: none; }
+.ptog .side { display: inline-flex; align-items: center; gap: 4px; color: var(--faint); transition: color .15s; }
+.ptog .side.on { color: var(--accent-text); }
+.day-track .ptog .side .ic { width: 15px; height: 15px; color: currentColor; }
+.ptog .sw { width: 40px; height: 22px; border-radius: 999px; background: var(--accent); position: relative; flex: none; }
+.ptog .sw::after { content: ""; position: absolute; top: 3px; right: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: right .15s; }
+.ptog .sw.home::after { right: 21px; }
+.ptog:hover .sw { filter: brightness(1.08); }
 /* settings: which handles show on this computer */
 .hrow { display: flex; align-items: center; gap: 10px; min-height: 40px; font-size: 13.5px; cursor: pointer; }
 .hrow > span { flex: 1; line-height: 1.35; }
@@ -532,8 +542,6 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent) !importa
 .tg:disabled { opacity: .5; cursor: default; }
 .tg:focus { background: var(--faint) !important; box-shadow: none; }
 .tg:checked:focus { background: var(--accent) !important; }
-.place-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
-.place-btn .ic { width: 15px; height: 15px; color: currentColor; }
 .stats4 .stat b { font-size: 17px; }
 .stats4 .stat span { font-size: 10.5px; line-height: 1.3; }
 .stat.hl { background: var(--accent-soft); }
