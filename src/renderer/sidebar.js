@@ -1648,6 +1648,7 @@ const TIME_OPTS = Array.from({ length: 38 }, (_, i) => clock(300 + i * 30)).map(
 
 function openSettings() {
   const c = S.config;
+  const homePc = c.workPlace === 'home';
   const p = S.vaults.personal;
   const t = S.vaults.team;
   const lockOpts = [[5, '5 דקות'], [10, '10 דקות'], [15, '15 דקות'], [30, 'חצי שעה'], [60, 'שעה'], [240, '4 שעות'], [0, 'אף פעם']];
@@ -1688,11 +1689,17 @@ function openSettings() {
 
     <div class="sec">
       <h4>${icon('sun')} יום עבודה ותזכורות</h4>
-      <div class="set-row"><span>שעות</span><select class="s-ws inp-sm">${TIME_OPTS}</select> <span class="muted">עד</span> <select class="s-we inp-sm">${TIME_OPTS}</select></div>
+      <div class="day-track set-place ${homePc ? 'home' : ''}"><span>המחשב הזה נספר כ־</span>
+        <button class="pchip ${homePc ? 'home' : ''}" data-s="place">${icon(homePc ? 'home' : 'office')}${homePc ? 'בית' : 'משרד'}<span class="swap">${icon('swap')}</span></button></div>
+      <div class="set-row ${homePc ? 'hidden' : ''}"><span>שעות</span><select class="s-ws inp-sm">${TIME_OPTS}</select> <span class="muted">עד</span> <select class="s-we inp-sm">${TIME_OPTS}</select></div>
+      <div class="set-row ${homePc ? '' : 'hidden'}"><span>יעד עבודה ביום</span><select class="s-hg">${[4, 5, 6, 7, 8, 9, 10].map((h) => `<option value="${h * 60}">${h} שעות</option>`).join('')}</select></div>
+      ${homePc ? '<p class="muted small" style="margin:-2px 0 6px">בלי שעות התחלה וסוף — נספר כל רגע של פעילות, מתי שעובדים.</p>' : ''}
       <div class="set-row"><span>ימים</span><div class="days">${DOW.map((d, i) => `<button class="day-b" data-d="${i}">${d}</button>`).join('')}</div></div>
-      <label class="check"><input type="checkbox" class="s-hourly"><span>התראה בכל שעה עגולה <small>"שעה 3 מתוך 8 הושלמה"</small></span></label>
+      <label class="check"><input type="checkbox" class="s-hourly"><span>${homePc ? 'התראה על כל שעת עבודה שהושלמה <small>"עבדת 3 שעות מתוך 8"</small>' : 'התראה בכל שעה עגולה <small>"שעה 3 מתוך 8 הושלמה"</small>'}</span></label>
       <label class="check"><input type="checkbox" class="s-water"><span>תזכורת לשתות מים</span></label>
-      <div class="set-row"><span>כל כמה זמן</span><select class="s-wm"><option value="45">45 דקות</option><option value="60">שעה (יחד עם התראת השעה)</option><option value="90">שעה וחצי</option><option value="120">שעתיים</option></select></div>
+      <div class="set-row"><span>כל כמה זמן</span><select class="s-wm">${homePc
+        ? '<option value="45">45 דקות של עבודה</option><option value="60">שעה של עבודה</option><option value="90">שעה וחצי של עבודה</option><option value="120">שעתיים של עבודה</option>'
+        : '<option value="45">45 דקות</option><option value="60">שעה (יחד עם התראת השעה)</option><option value="90">שעה וחצי</option><option value="120">שעתיים</option>'}</select></div>
       <div class="set-row"><span>יעד כוסות ביום</span><select class="s-wg">${[4, 5, 6, 7, 8, 9, 10, 12].map((n) => `<option value="${n}">${n}</option>`).join('')}</select></div>
       <div class="btns"><button class="ghost" data-s="test-toast">${icon('bell')} איך זה ייראה</button></div>
     </div>
@@ -1701,6 +1708,7 @@ function openSettings() {
       <h4>${icon('clock')} מעקב שעות</h4>
       <label class="check"><input type="checkbox" class="s-track"><span>מעקב שעות פועל <small>נמדד רק אם יש פעילות עכבר/מקלדת — לא אילו תוכנות או אתרים</small></span></label>
       <div class="set-row"><span>הפסקה אחרי</span><select class="s-break"><option value="5">5 דקות בלי פעילות</option><option value="10">10 דקות בלי פעילות</option><option value="15">15 דקות בלי פעילות</option></select></div>
+      ${homePc ? '<p class="muted small" style="margin:-2px 0 6px">בבית: עצירה קצרה מזה נספרת כעבודה, וארוכה ממנה היא הפסקה ולא נספרת.</p>' : ''}
       <div class="lbl-t" style="margin:6px 0 4px">מתחת לגרף השבוע</div>
       <label class="check"><input type="checkbox" class="s-avgw"><span>ממוצע עבודה ליום</span></label>
       <label class="check"><input type="checkbox" class="s-avgb"><span>ממוצע הפסקות ליום</span></label>
@@ -1774,6 +1782,23 @@ function openSettings() {
     const jk = $('.s-journal', m);
     jk.checked = c.journalEnabled !== false;
     jk.onchange = () => set({ journalEnabled: jk.checked });
+
+    // office / home for this computer — the section above changes with it, so reopen the settings
+    $('[data-s="place"]', m).onclick = async () => {
+      const wp = S.config.workPlace === 'home' ? 'office' : 'home';
+      await set({ workPlace: wp });
+      S.config.workPlace = wp;
+      const top = $('.modal', document)?.scrollTop || 0;
+      closeModal();
+      openSettings();
+      const md = $('.modal', document);
+      if (md) md.scrollTop = top;
+      if (mode === 'day') renderDay();
+      renderWorkday();
+    };
+    const hg = $('.s-hg', m);
+    hg.value = String(c.homeGoal || 480);
+    hg.onchange = () => set({ homeGoal: Number(hg.value) });
 
     const ws = $('.s-ws', m);
     const we = $('.s-we', m);

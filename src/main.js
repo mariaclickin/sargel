@@ -535,6 +535,7 @@ function applyConfig(patch) {
   if ('breakMinutes' in patch) clean.breakMinutes = Math.round(clamp(patch.breakMinutes, 3, 60));
   if ('waterMinutes' in patch) clean.waterMinutes = Math.round(clamp(patch.waterMinutes, 15, 240));
   if ('waterGoal' in patch) clean.waterGoal = Math.round(clamp(patch.waterGoal, 1, 20));
+  if ('homeGoal' in patch) clean.homeGoal = Math.round(clamp(patch.homeGoal, 60, 720) / 30) * 30;
   if ('autoLockMinutes' in patch) clean.autoLockMinutes = Math.round(clamp(patch.autoLockMinutes, 0, 1440));
   if ('launchAtLogin' in patch) clean.launchAtLogin = !!patch.launchAtLogin;
   if (['system', 'light', 'dark'].includes(patch.theme)) clean.theme = patch.theme;
@@ -1517,6 +1518,9 @@ function deleteJob({ id }) {
 /* ───────── activity tracking + reminders ───────── */
 const hm = (s) => { const [h, m] = String(s).split(':').map(Number); return h * 60 + m; };
 const fmtH = (min) => `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')}`;
+const isHome = () => cfg.get('workPlace') === 'home';
+/** a full day in minutes: the work hours at the office, the daily goal at home (no start / end time there) */
+const dayTarget = () => (isHome() ? clamp(cfg.get('homeGoal'), 60, 720) : hm(cfg.get('workEnd')) - hm(cfg.get('workStart')));
 
 function activityTick() {
   if (!activity) return;
@@ -1626,7 +1630,7 @@ function activitySummary({ weekOffset = 0 } = {}) {
   const breakMin = cfg.get('breakMinutes');
   const ws = hm(cfg.get('workStart'));
   const we = hm(cfg.get('workEnd'));
-  const target = we - ws;
+  const target = dayTarget();
   const workDays = cfg.get('workDays') || [];
   const now = new Date();
   const todayKey = dateKey(now);
@@ -1635,6 +1639,7 @@ function activitySummary({ weekOffset = 0 } = {}) {
     const dv = k <= todayKey ? dayView(k) : { line: '.'.repeat(1440), water: 0 };
     const fix = getFix(k);
     const wd = workdayPlaces(dv, breakMin, { ws, we, fix, nowMin: k === todayKey ? nowMin : null });
+    if (wd.off) wd.total = target; // vacation / sick count as a full day (the daily goal at home)
     return { dv, fix, wd };
   };
 
@@ -1715,22 +1720,29 @@ function remindersTick() {
   const m = now.getHours() * 60 + now.getMinutes();
   const ws = hm(cfg.get('workStart'));
   const we = hm(cfg.get('workEnd'));
-  const total = Math.max(1, Math.round((we - ws) / 60));
+  const total = Math.max(1, Math.round(dayTarget() / 60));
   const hourly = !!cfg.get('hourlyNotify');
   const water = !!cfg.get('waterReminder');
   const wm = cfg.get('waterMinutes');
   const waterWithHour = hourly && water && wm === 60;
 
-  const home = cfg.get('workPlace') === 'home';
+  const home = isHome();
   const events = [];
-  if (hourly && home) {
-    // home: no work hours — one toast for every full hour actually worked
-    const done = Math.min(total, Math.floor(todayWorkday().total / 60));
-    for (let h = 1; h <= done; h++) events.push({ id: `a${h}`, t: m, h, kind: h >= total ? 'end' : 'hour' });
-  } else if (hourly) {
-    for (let t = ws + 60; t <= we; t += 60) events.push({ id: `h${t}`, t, h: Math.round((t - ws) / 60), kind: t >= we ? 'end' : 'hour' });
+  if (home) {
+    // home: no work hours — toasts follow the time actually worked (a 3-hour break brings none)
+    const worked = (hourly || water) ? todayWorkday().total : 0;
+    if (hourly) {
+      const done = Math.min(total, Math.floor(worked / 60));
+      for (let h = 1; h <= done; h++) events.push({ id: `a${h}`, t: m, h, kind: h >= total ? 'end' : 'hour' });
+    }
+    if (water && !waterWithHour) {
+      const cups = Math.min(30, Math.floor(worked / Math.max(15, wm)));
+      for (let n = 1; n <= cups; n++) events.push({ id: `aw${n}`, t: m, kind: 'water' });
+    }
+  } else {
+    if (hourly) for (let t = ws + 60; t <= we; t += 60) events.push({ id: `h${t}`, t, h: Math.round((t - ws) / 60), kind: t >= we ? 'end' : 'hour' });
+    if (water && !waterWithHour) for (let t = ws + wm; t < we; t += wm) events.push({ id: `w${t}`, t, kind: 'water' });
   }
-  if (water && !waterWithHour) for (let t = ws + wm; t < we; t += wm) events.push({ id: `w${t}`, t, kind: 'water' });
   // due = time passed (shown up to 45 min late, e.g. after a break) and not shown yet
   const due = events.filter((e) => m >= e.t && m < e.t + 45 && !activity.wasNotified(key, e.id)).sort((a, b) => a.t - b.t);
   if (!due.length) return;
@@ -1751,8 +1763,8 @@ function remindersTick() {
   } else if (e.kind === 'hour') {
     const { h } = e;
     payload = {
-      kind: 'hour', title: `שעה ${h} מתוך ${total} הושלמה`,
-      body: `${Math.round((h / total) * 100)}% מהיום · נשארו ${total - h} שעות`,
+      kind: 'hour', title: home ? `עבדת ${h} ${h === 1 ? 'שעה' : 'שעות'} מתוך ${total}` : `שעה ${h} מתוך ${total} הושלמה`,
+      body: `${Math.round((h / total) * 100)}% ${home ? 'מהיעד' : 'מהיום'} · נשארו ${total - h} שעות`,
       water: waterWithHour, waterText: `💧 זמן לכוס מים · ${dv.water}/${goal} היום`,
     };
   } else {
@@ -2009,7 +2021,7 @@ function registerIpc() {
   handle('activity:get', ({ weekOffset }) => ({ summary: activitySummary({ weekOffset }) }));
   handle('activity:today', () => {
     const wd = activity ? todayWorkday() : { total: 0 };
-    return { worked: wd.total, target: hm(cfg.get('workEnd')) - hm(cfg.get('workStart')) };
+    return { worked: wd.total, target: dayTarget() };
   });
   handle('activity:day', (a) => dayForEdit(a));
   handle('activity:fix', (a) => saveDayFix(a));
@@ -2041,7 +2053,13 @@ function registerIpc() {
   handle('toast:close', () => { if (toastWin) toastWin.hide(); });
   handle('toast:test', ({ kind }) => {
     if (kind === 'water') showToast({ kind: 'water', title: 'זמן לכוס מים 💧', body: 'כך תיראה התזכורת', water: true });
-    else showToast({ kind: 'hour', title: 'שעה 3 מתוך 8 הושלמה', body: '37% מהיום · נשארו 5 שעות', water: !!cfg.get('waterReminder'), waterText: '💧 זמן לכוס מים' });
+    else {
+      const total = Math.max(1, Math.round(dayTarget() / 60));
+      const pct = Math.round((3 / total) * 100);
+      showToast(isHome()
+        ? { kind: 'hour', title: `עבדת 3 שעות מתוך ${total}`, body: `${pct}% מהיעד · נשארו ${total - 3} שעות`, water: !!cfg.get('waterReminder'), waterText: '💧 זמן לכוס מים' }
+        : { kind: 'hour', title: `שעה 3 מתוך ${total} הושלמה`, body: `${pct}% מהיום · נשארו ${total - 3} שעות`, water: !!cfg.get('waterReminder'), waterText: '💧 זמן לכוס מים' });
+    }
   });
   handle('data:reorder', (a) => reorder(a));
 

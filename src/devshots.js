@@ -69,12 +69,22 @@ module.exports = async function devShots(ctx) {
     await js(sb, `openSettings()`);
     await wait(700);
     await snap(sb, '03-settings-handles');
+    await js(sb, `document.querySelector('.s-hg').closest('.sec').scrollIntoView()`);
+    await wait(300);
+    log(`home settings: goal row visible=${await js(sb, `!document.querySelector('.s-hg').closest('.set-row').classList.contains('hidden')`)}, hours row hidden=${await js(sb, `document.querySelector('.s-ws').closest('.set-row').classList.contains('hidden')`)}`);
+    await snap(sb, '03b-settings-home');
+    await js(sb, `const el = document.querySelector('.s-hg'); el.value = '360'; el.onchange()`);
+    await wait(500);
+    log(`home goal saved: ${ctx.cfg().get('homeGoal')}`);
     await js(sb, `const el = document.querySelector('.s-journal'); el.checked = false; el.onchange()`);
     await wait(700);
     log(`journal window visible after hiding: ${ctx.journal().isVisible()}`);
     await js(sb, `const el = document.querySelector('.s-journal'); el.checked = true; el.onchange()`);
     await wait(500);
     await js(sb, `closeModal()`);
+    await js(sb, `renderWorkday()`);
+    await wait(600);
+    log(`banner with 6h goal: ${await text(sb, '#workday')}`);
 
     // back to office for the next run
     await js(sb, `document.querySelector('[data-action="place"]').click()`);
