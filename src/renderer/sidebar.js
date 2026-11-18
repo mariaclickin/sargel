@@ -449,7 +449,7 @@ async function renderHomeday(el) {
   const pct = Math.max(0, Math.min(100, Math.round((r.worked / Math.max(1, r.target)) * 100)));
   el.innerHTML = `
     <div class="wd-top"><span>${icon('home')} עבדת היום <b>${fmtMin(r.worked)}</b> מתוך ${fmtMin(r.target)}</span><span class="muted">${pct}%</span></div>
-    <div class="wd-bar"><div class="wd-fill home ${pct >= 100 ? 'done' : ''}" style="width:${pct}%"></div></div>`;
+    <div class="wd-bar"><div class="wd-fill ${pct >= 100 ? 'done' : ''}" style="width:${pct}%"></div></div>`;
 }
 setInterval(() => { if (view === 'main') renderWorkday(); }, 30000);
 

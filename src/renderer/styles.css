@@ -521,19 +521,16 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent) !importa
 .stats4 .stat, .stats3 .stat { padding: 7px 8px; }
 .stats3 .stat b { font-size: 17px; }
 .stats3 .stat span { font-size: 10.5px; line-height: 1.3; }
-/* this computer counts as office / home — one chip with a swap arrow; home is warm yellow everywhere */
-.pchip { border: 0; height: 30px; padding: 0 10px 0 8px; border-radius: 999px; display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 700; cursor: pointer; flex: none; background: var(--accent-soft); color: var(--accent-text); transition: filter .15s; }
+/* this computer counts as office / home — one chip with a swap arrow.
+   home = the tracking row turns inside out: white with a purple frame instead of a tinted fill */
+.pchip { border: 1.5px solid transparent; height: 30px; padding: 0 10px 0 8px; border-radius: 999px; display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; font-weight: 700; cursor: pointer; flex: none; background: var(--accent-soft); color: var(--accent-text); transition: filter .15s; }
 .pchip:hover { filter: brightness(.96); }
 .day-track .pchip .ic { width: 15px; height: 15px; color: currentColor; }
 .pchip .swap { display: inline-flex; margin-inline-start: 3px; padding-inline-start: 6px; border-inline-start: 1px solid currentColor; opacity: .55; }
 .day-track .pchip .swap .ic { width: 13px; height: 13px; }
-.pchip.home { background: #E6A01E; color: #fff; }
-.day-track.home { background: #FFF4DC; }
-.wd-fill.home { background: linear-gradient(90deg, #E6A01E, #F2BE5C); }
-@media (prefers-color-scheme: dark) {
-  .pchip.home { background: #F2BB55; color: #1b1924; }
-  .day-track.home { background: #3a2f17; }
-}
+.pchip.home { background: var(--panel); border-color: var(--accent); }
+.day-track.home { background: var(--panel); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.day-track.home.off { background: var(--warn-soft); }
 /* settings: which handles show on this computer */
 .hrow { display: flex; align-items: center; gap: 10px; min-height: 40px; font-size: 13.5px; cursor: pointer; }
 .hrow > span { flex: 1; line-height: 1.35; }
