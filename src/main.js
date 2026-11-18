@@ -1649,7 +1649,7 @@ function activitySummary({ weekOffset = 0 } = {}) {
       const k = dateKey(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
       const { dv, fix, wd } = k === todayKey ? t : dayInfo(k);
       if (k <= todayKey) total += wd.total;
-      days.push({ date: k, dow: i, future: k > todayKey, workday: workDays.includes(i), total: wd.total, overtime: wd.overtime, breaks: wd.breakMinutes || 0, off: wd.off, place: wd.place, fixed: !!fix && !wd.off, water: dv.water });
+      days.push({ date: k, dow: i, future: k > todayKey, workday: workDays.includes(i), total: wd.total, overtime: wd.overtime, breaks: wd.breakMinutes || 0, off: wd.off, fixed: !!fix && !wd.off, water: dv.water });
     }
     return { days, total };
   };
