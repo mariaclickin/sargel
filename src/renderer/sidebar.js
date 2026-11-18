@@ -449,7 +449,7 @@ async function renderHomeday(el) {
   const pct = Math.max(0, Math.min(100, Math.round((r.worked / Math.max(1, r.target)) * 100)));
   el.innerHTML = `
     <div class="wd-top"><span>${icon('home')} עבדת היום <b>${fmtMin(r.worked)}</b> מתוך ${fmtMin(r.target)}</span><span class="muted">${pct}%</span></div>
-    <div class="wd-bar"><div class="wd-fill ${pct >= 100 ? 'done' : ''}" style="width:${pct}%"></div></div>`;
+    <div class="wd-bar"><div class="wd-fill home ${pct >= 100 ? 'done' : ''}" style="width:${pct}%"></div></div>`;
 }
 setInterval(() => { if (view === 'main') renderWorkday(); }, 30000);
 
@@ -655,11 +655,9 @@ async function renderDay() {
   if (c.avgBreaks !== false) avgs.push(['ממוצע הפסקות ליום', s.weekAvg.breaks]);
 
   box.innerHTML = `
-    <div class="day-track ${s.enabled ? '' : 'off'}">
+    <div class="day-track ${s.enabled ? '' : 'off'} ${home ? 'home' : ''}">
       <span>${icon('clock')} מעקב שעות: <b>${s.enabled ? 'פועל' : 'כבוי'}</b></span>
-      <button class="ptog" data-action="place" title="איפה המחשב הזה נספר — לחיצה מחליפה">
-        <span class="side ${home ? '' : 'on'}">${icon('office')}משרד</span><i class="sw ${home ? 'home' : ''}"></i><span class="side ${home ? 'on' : ''}">${icon('home')}בית</span>
-      </button>
+      <button class="pchip ${home ? 'home' : ''}" data-action="place" title="${home ? 'המחשב הזה נספר כבית — לחיצה: משרד' : 'המחשב הזה נספר כמשרד — לחיצה: בית'}">${icon(home ? 'home' : 'office')}${home ? 'בית' : 'משרד'}<span class="swap">${icon('swap')}</span></button>
     </div>
     ${s.enabled ? '' : `<p class="muted small center">כשהמעקב כבוי לא נרשם דבר. מפעילים אותו בהגדרות ← מעקב שעות.</p>`}
     ${wd.off ? `

@@ -48,7 +48,7 @@ module.exports = async function devShots(ctx) {
     log(`office tiles: ${await text(sb, '.stats')}`);
     log(`office banner: ${await text(sb, '#workday')}`);
     log(`shortcuts collapsed: ${await js(sb, `document.querySelectorAll('#launch .lbtn').length + ' buttons, last: ' + document.querySelector('#launch .lbtn:last-child').textContent.replace(/\s+/g, ' ').trim()`)}`);
-    log(`switch: ${await text(sb, '.ptog')}`);
+    log(`switch: ${await text(sb, '.pchip')}`);
     await snap(sb, '01-office');
     await js(sb, `document.querySelector('[data-action="launch-more"]').click()`);
     await wait(400);
@@ -59,7 +59,7 @@ module.exports = async function devShots(ctx) {
 
     await js(sb, `document.querySelector('[data-action="place"]').click()`);
     await wait(1200);
-    log(`after click, switch: ${await text(sb, '.ptog .side.on')} · config: ${ctx.cfg().get('workPlace')}`);
+    log(`after click, switch: ${await text(sb, '.pchip')} · config: ${ctx.cfg().get('workPlace')}`);
     log(`home tiles: ${await text(sb, '.stats')}`);
     log(`home banner: ${await text(sb, '#workday')}`);
     log(`today place on disk: ${act.day(key(now)).place}`);
@@ -79,7 +79,7 @@ module.exports = async function devShots(ctx) {
     // back to office for the next run
     await js(sb, `document.querySelector('[data-action="place"]').click()`);
     await wait(800);
-    log(`back: ${await text(sb, '.ptog .side.on')}`);
+    log(`back: ${await text(sb, '.pchip')}`);
 
     // what the slimmer Mac handle looks like (class only — the window size is set on a real Mac)
     ctx.setExpanded(false, {}, 'sidebar');
