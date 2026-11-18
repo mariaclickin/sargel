@@ -38,6 +38,13 @@ module.exports = async function devShots(ctx) {
     const now = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
     act.day(key(now)).line = line([[H(8, 30), H(10, 30), 'w'], [H(10, 30), H(13, 30), 'b'], [H(13, 30), Math.max(H(13, 31), nowMin), 'w']]);
+    // earlier this week: Sunday at the office, Monday and Tuesday at home
+    for (let back = 1; back <= now.getDay(); back++) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - back);
+      const day = act.day(key(d));
+      day.line = line([[H(8, 45), H(12), 'w'], [H(12), H(12, 40), 'b'], [H(12, 40), H(17, 30), 'w']]);
+      day.place = d.getDay() === 0 ? 'office' : 'home';
+    }
     act.dirty = true;
 
     ctx.setExpanded(true, { explicit: true }, 'sidebar');

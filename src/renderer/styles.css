@@ -530,9 +530,23 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent) !importa
 .pchip.home { background: #E6A01E; color: #fff; }
 .day-track.home { background: #FFF4DC; }
 .wd-fill.home { background: linear-gradient(90deg, #E6A01E, #F2BE5C); }
+/* a home day in "My day": work is yellow; breaks turn soft grey so they don't blend with it */
+#day.homeday .tl .tl-w, #day.homeday .tl-day .lg-w { background: #E6A01E; }
+#day.homeday .tl .tl-b, #day.homeday .tl-day .lg-b { background: #D9D3E8; }
+#day.homeday .stat.hl { background: #FFF4DC; }
+#day.homeday .stats .acc, #day.homeday .day-note .acc { color: #9A6512; }
+/* home days in the week chart */
+.wk2.home .wk2-fill { background: #E6A01E; }
+.wk2.home .wk2-fill.now { background: #F2CF86; }
+.wk2.home.today .wk2-col { outline-color: #E6A01E; }
+.wk2.home small { color: #B07812; }
+.lg-home { background: #E6A01E; }
 @media (prefers-color-scheme: dark) {
   .pchip.home { background: #F2BB55; color: #1b1924; }
   .day-track.home { background: #3a2f17; }
+  #day.homeday .tl .tl-b, #day.homeday .tl-day .lg-b { background: #4a4560; }
+  #day.homeday .stat.hl { background: #3a2f17; }
+  #day.homeday .stats .acc, #day.homeday .day-note .acc { color: #F2BB55; }
 }
 /* settings: which handles show on this computer */
 .hrow { display: flex; align-items: center; gap: 10px; min-height: 40px; font-size: 13.5px; cursor: pointer; }

@@ -638,7 +638,7 @@ async function renderDay() {
     const label = d.total >= target ? fmtMin(target) : (d.total ? fmtMin(d.total) : '');
     const sub = d.overtime ? `+${fmtMin(d.overtime)}` : d.off ? offLabel[d.off] : today ? 'עכשיו' : '';
     return `
-      <button class="wk2 ${today ? 'today' : ''} ${d.future && !d.off ? 'fut' : ''}" data-action="day-edit" data-date="${d.date}" title="לחיצה: תיקון / חופש / מחלה">
+      <button class="wk2 ${d.place === 'home' && !d.off ? 'home' : ''} ${today ? 'today' : ''} ${d.future && !d.off ? 'fut' : ''}" data-action="day-edit" data-date="${d.date}" title="לחיצה: תיקון / חופש / מחלה">
         <div class="wk2-col">
           <i class="wk2-tgt" style="bottom:${pct(target)}%"></i>
           ${d.overtime ? `<div class="wk2-ot" style="height:${pct(d.overtime)}%"></div>` : ''}
@@ -654,6 +654,7 @@ async function renderDay() {
   if (c.avgWork !== false) avgs.push(['ממוצע עבודה ליום', s.weekAvg.work]);
   if (c.avgBreaks !== false) avgs.push(['ממוצע הפסקות ליום', s.weekAvg.breaks]);
 
+  box.classList.toggle('homeday', wd.place === 'home');
   box.innerHTML = `
     <div class="day-track ${s.enabled ? '' : 'off'} ${home ? 'home' : ''}">
       <span>${icon('clock')} מעקב שעות: <b>${s.enabled ? 'פועל' : 'כבוי'}</b></span>
@@ -678,7 +679,7 @@ async function renderDay() {
     <div class="tl">${runs.map(([a, b, ch]) => `<div class="tl-${ch === 'w' ? 'w' : ch === 'e' ? 'e' : ch === 'b' ? 'b' : ch === 'o' ? 'o' : 'n'}" style="width:${((b - a) / span) * 100}%" title="${clock(a)}–${clock(b)}"></div>`).join('')}
       ${nowMin >= from && nowMin <= to ? `<div class="tl-now" style="left:${((nowMin - from) / span) * 100}%"></div>` : ''}</div>
     <div class="tl-axis">${ticks.map((m) => `<span style="left:${((m - from) / span) * 100}%">${clock(m)}</span>`).join('')}</div>
-    <div class="tl-legend"><span><i class="lg-w"></i>עבודה</span>${wd.place === 'home' ? '' : `<span><i class="lg-e"></i>לפני ${clock(ws)}</span>`}<span><i class="lg-b"></i>הפסקה (${s.breakMin}+ דק׳)</span><span><i class="lg-o"></i>לא נמדד</span></div>
+    <div class="tl-legend tl-day"><span><i class="lg-w"></i>עבודה</span>${wd.place === 'home' ? '' : `<span><i class="lg-e"></i>לפני ${clock(ws)}</span>`}<span><i class="lg-b"></i>הפסקה (${s.breakMin}+ דק׳)</span><span><i class="lg-o"></i>לא נמדד</span></div>
     <div class="kv"><span>${wd.place === 'home' ? 'התחלה ראשונה' : 'הגעה'}${wd.fixed && !wd.off ? ' <small class="acc">(תוקן ידנית)</small>' : ''}</span><b dir="ltr">${wd.arrival != null ? clock(wd.arrival) : '—'} <button class="icon-btn sm kv-edit" data-action="day-edit" data-date="${s.today.date}" title="תיקון היום">${icon('edit')}</button></b></div>
     <div class="kv"><span>הפסקה הכי ארוכה</span><b>${t.longest ? `${t.longest} דק׳ (${clock(t.longestAt)})` : '—'}</b></div>
     <div class="kv"><span>השבוע עד עכשיו</span><b>${fmtMin(s.weekTotal)} / ${fmtMin(s.weekTarget)}</b></div>
@@ -694,7 +695,7 @@ async function renderDay() {
     <div class="week2">${weekHTML}</div>
     ${avgs.length ? `<div class="wk-avg">${avgs.map(([label, v]) => `<div><span>${label}</span><b>${v != null ? fmtMin(v) : '—'}</b></div>`).join('')}</div>` : ''}
     <div class="wk-avg-n">${avgs.length ? (s.weekAvg.days ? `לפי ${s.weekAvg.days} ימי עבודה${s.weekOffset ? '' : ' (בלי היום)'} · ` : `${s.weekOffset ? 'אין ימי עבודה בשבוע הזה' : 'עוד אין יום עבודה שלם השבוע'} · `) : ''}לחיצה על יום = תיקון / חופש / מחלה</div>
-    <div class="tl-legend wk2-legend"><span><i class="lg-w"></i>עבודה</span><span><i class="lg-ot"></i>שעות נוספות</span><span><i class="lg-vac"></i>חופש</span><span><i class="lg-sick"></i>מחלה</span><span>✎ תוקן ידנית</span></div>`;
+    <div class="tl-legend wk2-legend"><span><i class="lg-w"></i>${s.week.some((d) => d.place === 'home' && !d.off) ? 'משרד' : 'עבודה'}</span>${s.week.some((d) => d.place === 'home' && !d.off) ? '<span><i class="lg-home"></i>בית</span>' : ''}<span><i class="lg-ot"></i>שעות נוספות</span><span><i class="lg-vac"></i>חופש</span><span><i class="lg-sick"></i>מחלה</span><span>✎ תוקן ידנית</span></div>`;
 }
 
 /* fix a day / mark vacation or sick */
