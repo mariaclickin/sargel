@@ -10,3 +10,8 @@ contextBridge.exposeInMainWorld('sargel', {
     ipcRenderer.on(channel, (_e, data) => fn(data));
   },
 });
+
+// Mac gets slimmer edge handles (styles.css: html.mac)
+if (process.platform === 'darwin') {
+  window.addEventListener('DOMContentLoaded', () => document.documentElement.classList.add('mac'));
+}

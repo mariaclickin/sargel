@@ -436,9 +436,20 @@ function renderWorkday() {
     return;
   }
   if (!w.isDay) return;
+  if (S.config.workPlace === 'home') { renderHomeday(el); return; }
   el.innerHTML = `
     <div class="wd-top"><span>${icon('sun')} יום עבודה <b>${w.pct}%</b></span><span class="muted">${w.note}</span></div>
     <div class="wd-bar"><div class="wd-fill ${w.pct >= 100 ? 'done' : ''}" style="width:${w.pct}%"></div></div>`;
+}
+
+/* at home there are no work hours: the bar is the time actually worked out of a full day */
+async function renderHomeday(el) {
+  const r = await api.call('activity:today');
+  if (!r.ok || S.config.workPlace !== 'home') return;
+  const pct = Math.max(0, Math.min(100, Math.round((r.worked / Math.max(1, r.target)) * 100)));
+  el.innerHTML = `
+    <div class="wd-top"><span>${icon('home')} עבדת היום <b>${fmtMin(r.worked)}</b> מתוך ${fmtMin(r.target)}</span><span class="muted">${pct}%</span></div>
+    <div class="wd-bar"><div class="wd-fill ${pct >= 100 ? 'done' : ''}" style="width:${pct}%"></div></div>`;
 }
 setInterval(() => { if (view === 'main') renderWorkday(); }, 30000);
 
@@ -601,7 +612,7 @@ async function renderDay() {
   const chAt = (i) => {
     let ch = line[i];
     if (ch === '.' && t.arrival != null && i > t.arrival && i < t.leave) ch = 'b';
-    if (ch === 'w' && i < ws) ch = 'e';
+    if (ch === 'w' && i < ws && wd.place !== 'home') ch = 'e'; // at home there is no start time
     return ch;
   };
   const runs = [];
@@ -638,6 +649,7 @@ async function renderDay() {
   }).join('');
 
   // which per-day averages to show under the week (chosen in settings)
+  const home = c.workPlace === 'home';
   const avgs = [];
   if (c.avgWork !== false) avgs.push(['ממוצע עבודה ליום', s.weekAvg.work]);
   if (c.avgBreaks !== false) avgs.push(['ממוצע הפסקות ליום', s.weekAvg.breaks]);
@@ -645,18 +657,20 @@ async function renderDay() {
   box.innerHTML = `
     <div class="day-track ${s.enabled ? '' : 'off'}">
       <span>${icon('clock')} מעקב שעות: <b>${s.enabled ? 'פועל' : 'כבוי'}</b></span>
-      <button class="switch ${s.enabled ? 'on' : ''}" data-action="track-toggle" title="${s.enabled ? 'כיבוי המעקב' : 'הפעלת המעקב'}"><span></span></button>
+      <button class="place-btn" data-action="place" title="${home ? 'המחשב הזה נספר כעבודה מהבית — לחיצה: משרד' : 'המחשב הזה נספר כמשרד — לחיצה: בית'}">${icon(home ? 'home' : 'office')} ${home ? 'בית' : 'משרד'}</button>
     </div>
-    ${s.enabled ? '' : `<p class="muted small center">כשהמעקב כבוי לא נרשם דבר. פס יום העבודה והתזכורות ממשיכים לעבוד.</p>`}
+    ${s.enabled ? '' : `<p class="muted small center">כשהמעקב כבוי לא נרשם דבר. מפעילים אותו בהגדרות ← מעקב שעות.</p>`}
     ${wd.off ? `
       <div class="day-off ${wd.off}">${wd.off === 'vac' ? '🏖 היום מסומן כחופש' : '🩹 היום מסומן כמחלה'} · נספר ${fmtMin(target)}
         <button class="ghost sm" data-action="day-edit" data-date="${s.today.date}">שינוי</button></div>` : `
-      <div class="stats stats4">
-        <div class="stat"><b>${fmtMin(wd.total)}</b><span>זמן עבודה<br>כולל הפסקות</span></div>
+      <div class="stats ${wd.place === 'home' ? 'stats3' : 'stats4'}">
+        <div class="stat"><b>${fmtMin(wd.total)}</b><span>${wd.place === 'home' ? 'זמן עבודה<br>בפועל' : 'זמן עבודה<br>כולל הפסקות'}</span></div>
         <div class="stat"><b>${fmtMin(wd.breakMinutes || 0)}</b><span>הפסקות${wd.breaks != null ? `<br>(${wd.breaks})` : ''}</span></div>
-        <div class="stat"><b class="acc">${wd.overtime ? `+${fmtMin(wd.overtime)}` : '0:00'}</b><span>שעות<br>נוספות</span></div>
+        ${wd.place === 'home' ? '' : `<div class="stat"><b class="acc">${wd.overtime ? `+${fmtMin(wd.overtime)}` : '0:00'}</b><span>שעות<br>נוספות</span></div>`}
         <div class="stat hl"><b class="acc">${fmtMin(fo.len || 0)}</b><span>רצף ריכוז<br>הכי ארוך</span></div>
       </div>
+      ${wd.place === 'home' ? `<p class="muted small day-note">${icon('home')} מצב בית: נספר רק זמן הפעילות, בלי שעות התחלה וסוף</p>` : ''}
+      ${wd.place === 'mixed' && wd.homeMinutes ? `<p class="muted small day-note">${icon('home')} <b class="acc">+${fmtMin(wd.homeMinutes)}</b> מהבית, מחוץ לשעות המשרד</p>` : ''}
       ${fo.len ? `<p class="muted small day-note">${icon('bolt')} הרצף הארוך: ${clock(fo.start)}–${clock(fo.end)} בלי הפסקה של ${s.breakMin}+ דק׳</p>` : ''}
       ${wd.early ? `<p class="muted small day-note">${icon('sun')} הגעת ב-${clock(wd.arrival)} · <b class="acc">+${fmtMin(wd.early)} לפני ${clock(ws)}</b> נספר כשעות נוספות</p>` : ''}
       ${wd.late ? `<p class="muted small day-note">${icon('clock')} <b class="acc">+${fmtMin(wd.late)} אחרי ${clock(we)}</b> נספר כשעות נוספות</p>` : ''}`}
@@ -664,8 +678,8 @@ async function renderDay() {
     <div class="tl">${runs.map(([a, b, ch]) => `<div class="tl-${ch === 'w' ? 'w' : ch === 'e' ? 'e' : ch === 'b' ? 'b' : ch === 'o' ? 'o' : 'n'}" style="width:${((b - a) / span) * 100}%" title="${clock(a)}–${clock(b)}"></div>`).join('')}
       ${nowMin >= from && nowMin <= to ? `<div class="tl-now" style="left:${((nowMin - from) / span) * 100}%"></div>` : ''}</div>
     <div class="tl-axis">${ticks.map((m) => `<span style="left:${((m - from) / span) * 100}%">${clock(m)}</span>`).join('')}</div>
-    <div class="tl-legend"><span><i class="lg-w"></i>עבודה</span><span><i class="lg-e"></i>לפני ${clock(ws)}</span><span><i class="lg-b"></i>הפסקה (${s.breakMin}+ דק׳)</span><span><i class="lg-o"></i>לא נמדד</span></div>
-    <div class="kv"><span>הגעה${wd.fixed && !wd.off ? ' <small class="acc">(תוקן ידנית)</small>' : ''}</span><b dir="ltr">${wd.arrival != null ? clock(wd.arrival) : '—'} <button class="icon-btn sm kv-edit" data-action="day-edit" data-date="${s.today.date}" title="תיקון היום">${icon('edit')}</button></b></div>
+    <div class="tl-legend"><span><i class="lg-w"></i>עבודה</span>${wd.place === 'home' ? '' : `<span><i class="lg-e"></i>לפני ${clock(ws)}</span>`}<span><i class="lg-b"></i>הפסקה (${s.breakMin}+ דק׳)</span><span><i class="lg-o"></i>לא נמדד</span></div>
+    <div class="kv"><span>${wd.place === 'home' ? 'התחלה ראשונה' : 'הגעה'}${wd.fixed && !wd.off ? ' <small class="acc">(תוקן ידנית)</small>' : ''}</span><b dir="ltr">${wd.arrival != null ? clock(wd.arrival) : '—'} <button class="icon-btn sm kv-edit" data-action="day-edit" data-date="${s.today.date}" title="תיקון היום">${icon('edit')}</button></b></div>
     <div class="kv"><span>הפסקה הכי ארוכה</span><b>${t.longest ? `${t.longest} דק׳ (${clock(t.longestAt)})` : '—'}</b></div>
     <div class="kv"><span>השבוע עד עכשיו</span><b>${fmtMin(s.weekTotal)} / ${fmtMin(s.weekTarget)}</b></div>
     <div class="kv"><span>שעות נוספות החודש</span><b class="acc">${s.monthOver ? `+${fmtMin(s.monthOver)}` : '0:00'}</b></div>
@@ -989,7 +1003,7 @@ async function onPanelClick(e) {
     case 'note-open': openNoteEditor(S.data.notes.find((n) => n.id === a.dataset.nid)); break;
     case 'note-check': e.stopPropagation(); toggleNoteCheck(a.closest('.note').dataset.nid, a.dataset.cid); break;
     case 'water': await api.call('activity:water', { delta: Number(a.dataset.d) }); renderDay(); break;
-    case 'track-toggle': await api.call('config:set', { patch: { trackEnabled: !S.config.trackEnabled } }); renderDay(); break;
+    case 'place': { const wp = S.config.workPlace === 'home' ? 'office' : 'home'; await api.call('config:set', { patch: { workPlace: wp } }); S.config.workPlace = wp; renderDay(); renderWorkday(); break; }
     case 'cfilter': colorFilter = a.dataset.c === colorFilter ? null : (a.dataset.c || null); renderList(); break;
     case 'launch': runLaunch(a.dataset.lid, a.querySelector('.ltile')); break;
     case 'add-launch': openLauncherEditor(null); break;
@@ -1621,6 +1635,14 @@ function openSettings() {
     <h3>${icon('gear')} הגדרות</h3>
 
     <div class="sec">
+      <h4>ידיות בצד המסך</h4>
+      <div class="hrow"><i class="hdot" style="background:#7F77DD"></i><span>הסרגל (סגולה)<small>תמיד מוצגת</small></span><input type="checkbox" class="tg" checked disabled></div>
+      <label class="hrow"><i class="hdot" style="background:#F29CBF"></i><span>המעקב (ורודה)<small>חודש · צ'קליסט · TIME BLOCKS · עבודות</small></span><input type="checkbox" class="tg s-tracker"></label>
+      <label class="hrow"><i class="hdot" style="background:#9AC4F8"></i><span>היומן (כחולה)<small>ספרים · אימונים · למידה · תאריכים · משפטים</small></span><input type="checkbox" class="tg s-journal"></label>
+      <p class="muted small">נשמר למחשב הזה בלבד. המידע לא נמחק, ואפשר להגיע לפאנלים גם בנקודות שבכותרת.</p>
+    </div>
+
+    <div class="sec">
       <h4>מראה</h4>
       <div class="set-row"><span>צד המסך</span>
         <div class="seg sm" data-k="side"><button data-v="right">ימין</button><button data-v="left">שמאל</button></div></div>
@@ -1698,8 +1720,6 @@ function openSettings() {
     <div class="sec">
       <h4>כללי</h4>
       <label class="check"><input type="checkbox" class="s-login"><span>הפעלה אוטומטית כשהמחשב נדלק</span></label>
-      <label class="check"><input type="checkbox" class="s-tracker"><span>להציג את ידית "המעקב" (הוורודה) <small>חודש · צ'קליסט · TIME BLOCKS · עבודות</small></span></label>
-      <label class="check"><input type="checkbox" class="s-journal"><span>להציג את ידית "היומן" (הכחולה) <small>ספרים · אימונים · למידה · תאריכים · משפטים</small></span></label>
       <div class="set-row"><span class="muted small">גרסה ${esc(S.version)}</span><button class="link-btn" data-s="quit">יציאה מהסרגל</button></div>
     </div>
 

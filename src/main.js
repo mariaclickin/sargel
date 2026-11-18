@@ -10,7 +10,7 @@ const crypto = require('crypto');
 const { Vault, VaultError } = require('./vault');
 const { Config, DEFAULTS } = require('./config');
 const launcher = require('./launcher');
-const { Activity, combine, stats, focusStreak, workday, dateKey } = require('./activity');
+const { Activity, combine, stats, focusStreak, workdayPlaces, dateKey } = require('./activity');
 const journal = require('./journal');
 
 if (process.env.SARGEL_USER_DATA) app.setPath('userData', process.env.SARGEL_USER_DATA);
@@ -18,7 +18,8 @@ if (process.env.SARGEL_USER_DATA) app.setPath('userData', process.env.SARGEL_USE
 const isMac = process.platform === 'darwin';
 const ASSETS = path.join(__dirname, '..', 'assets');
 const RENDERER = path.join(__dirname, 'renderer');
-const HANDLE = { w: 22, h: 104 };
+// the edge handle window (a bit wider than the visible strip, so it's easy to hover); slimmer on Mac
+const HANDLE = isMac ? { w: 14, h: 72 } : { w: 22, h: 104 };
 const FILE_NAMES = { personal: 'sargel-personal.sargel', team: 'sargel-team.sargel' };
 const MIN_PASSWORD = 8;
 
@@ -104,7 +105,7 @@ function collapsedBounds(kind = 'sidebar') {
   // the pink handle sits right below the purple one, the blue one below the pink (or above, if there's no room)
   const steps = kind === 'tracker' ? 1 : kind === 'journal' ? 2 : 0;
   if (steps) {
-    const gap = HANDLE.h + 10;
+    const gap = HANDLE.h + (isMac ? 8 : 10);
     const below = y + steps * gap;
     y = below + HANDLE.h <= wa.y + wa.height ? below : y - steps * gap;
   }
@@ -537,7 +538,14 @@ function applyConfig(patch) {
   if ('autoLockMinutes' in patch) clean.autoLockMinutes = Math.round(clamp(patch.autoLockMinutes, 0, 1440));
   if ('launchAtLogin' in patch) clean.launchAtLogin = !!patch.launchAtLogin;
   if (['system', 'light', 'dark'].includes(patch.theme)) clean.theme = patch.theme;
+  if (patch.workPlace === 'office' || patch.workPlace === 'home') clean.workPlace = patch.workPlace;
+  const placeChanged = 'workPlace' in clean && clean.workPlace !== cfg.get('workPlace');
   cfg.set(clean);
+  if (placeChanged && activity) {
+    activity.switchPlace(clean.workPlace);
+    activity.save();
+    syncActivityToVault();
+  }
   if (['hotkey', 'launcherHotkey', 'quickNoteHotkey', 'blockHotkey'].some((k) => k in clean)) registerHotkey();
   if ('launchAtLogin' in clean) applyLogin();
   if ('theme' in clean) nativeTheme.themeSource = clean.theme;
@@ -1518,6 +1526,7 @@ function activityTick() {
     idleSec: powerMonitor.getSystemIdleTime(),
     locked: screenLocked,
     breakMin: cfg.get('breakMinutes'),
+    place: cfg.get('workPlace') === 'home' ? 'home' : 'office',
   });
 }
 
@@ -1538,19 +1547,38 @@ function syncActivityToVault() {
   if (changed || v.data.days.length !== before) queueSave('personal');
 }
 
-/** the day as seen from all computers: local + other machines' copies in the vault */
+/**
+ * The day as seen from all computers: local + other machines' copies in the vault.
+ * Lines are also split by where each computer was set to (office / home) — home counts only active time.
+ */
 function dayView(key) {
-  const lines = [activity.day(key).line];
-  let water = activity.day(key).water || 0;
+  const local = activity.day(key);
+  const byPlace = { office: [], home: [] };
+  byPlace[(local.place || cfg.get('workPlace')) === 'home' ? 'home' : 'office'].push(local.line);
+  let water = local.water || 0;
   const v = vaults.personal;
   if (v && v.unlocked) {
     for (const d of v.data.days) {
       if (d.deleted || d.date !== key || d.machine === activity.machine) continue;
-      lines.push(d.line);
+      byPlace[d.place === 'home' ? 'home' : 'office'].push(d.line);
       water += d.water || 0;
     }
   }
-  return { line: combine(lines), water };
+  return {
+    line: combine([...byPlace.office, ...byPlace.home]),
+    office: byPlace.office.length ? combine(byPlace.office) : null,
+    home: byPlace.home.length ? combine(byPlace.home) : null,
+    water,
+  };
+}
+
+/** today's workday on all computers (office / home aware) */
+function todayWorkday() {
+  const key = dateKey();
+  const now = new Date();
+  return workdayPlaces(dayView(key), cfg.get('breakMinutes'), {
+    ws: hm(cfg.get('workStart')), we: hm(cfg.get('workEnd')), fix: getFix(key), nowMin: now.getHours() * 60 + now.getMinutes(),
+  });
 }
 
 /* manual day fixes + vacation / sick days (synced in the vault; cached for when it's locked) */
@@ -1606,7 +1634,7 @@ function activitySummary({ weekOffset = 0 } = {}) {
   const dayInfo = (k) => {
     const dv = k <= todayKey ? dayView(k) : { line: '.'.repeat(1440), water: 0 };
     const fix = getFix(k);
-    const wd = workday(dv.line, breakMin, { ws, we, fix, nowMin: k === todayKey ? nowMin : null });
+    const wd = workdayPlaces(dv, breakMin, { ws, we, fix, nowMin: k === todayKey ? nowMin : null });
     return { dv, fix, wd };
   };
 
@@ -1671,7 +1699,7 @@ function dayForEdit({ date }) {
   const isToday = date === dateKey();
   const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
   const dv = date <= dateKey() ? dayView(date) : { line: '.'.repeat(1440) };
-  const measured = workday(dv.line, breakMin, { ws, we, nowMin: isToday ? nowMin : null });
+  const measured = workdayPlaces(dv, breakMin, { ws, we, nowMin: isToday ? nowMin : null });
   return { day: { date, measured, fix: getFix(date), future: date > dateKey() } };
 }
 
@@ -1693,8 +1721,15 @@ function remindersTick() {
   const wm = cfg.get('waterMinutes');
   const waterWithHour = hourly && water && wm === 60;
 
+  const home = cfg.get('workPlace') === 'home';
   const events = [];
-  if (hourly) for (let t = ws + 60; t <= we; t += 60) events.push({ id: `h${t}`, t, kind: t >= we ? 'end' : 'hour' });
+  if (hourly && home) {
+    // home: no work hours — one toast for every full hour actually worked
+    const done = Math.min(total, Math.floor(todayWorkday().total / 60));
+    for (let h = 1; h <= done; h++) events.push({ id: `a${h}`, t: m, h, kind: h >= total ? 'end' : 'hour' });
+  } else if (hourly) {
+    for (let t = ws + 60; t <= we; t += 60) events.push({ id: `h${t}`, t, h: Math.round((t - ws) / 60), kind: t >= we ? 'end' : 'hour' });
+  }
   if (water && !waterWithHour) for (let t = ws + wm; t < we; t += wm) events.push({ id: `w${t}`, t, kind: 'water' });
   // due = time passed (shown up to 45 min late, e.g. after a break) and not shown yet
   const due = events.filter((e) => m >= e.t && m < e.t + 45 && !activity.wasNotified(key, e.id)).sort((a, b) => a.t - b.t);
@@ -1709,12 +1744,12 @@ function remindersTick() {
   if (e.kind === 'end') {
     const st = stats(dv.line, cfg.get('breakMinutes'));
     payload = {
-      kind: 'end', title: 'סיימת את יום העבודה 🎉',
+      kind: 'end', title: home ? `השלמת ${total} שעות עבודה 🎉` : 'סיימת את יום העבודה 🎉',
       body: `${cfg.get('trackEnabled') ? `${fmtH(st.active)} שעות פעילות · ` : ''}${dv.water} כוסות מים`,
       water: false,
     };
   } else if (e.kind === 'hour') {
-    const h = Math.round((e.t - ws) / 60);
+    const { h } = e;
     payload = {
       kind: 'hour', title: `שעה ${h} מתוך ${total} הושלמה`,
       body: `${Math.round((h / total) * 100)}% מהיום · נשארו ${total - h} שעות`,
@@ -1972,6 +2007,10 @@ function registerIpc() {
   handle('trk:jobDelete', (a) => deleteJob(a));
 
   handle('activity:get', ({ weekOffset }) => ({ summary: activitySummary({ weekOffset }) }));
+  handle('activity:today', () => {
+    const wd = activity ? todayWorkday() : { total: 0 };
+    return { worked: wd.total, target: hm(cfg.get('workEnd')) - hm(cfg.get('workStart')) };
+  });
   handle('activity:day', (a) => dayForEdit(a));
   handle('activity:fix', (a) => saveDayFix(a));
   handle('activity:unfix', (a) => clearDayFix(a));
@@ -2101,7 +2140,7 @@ async function boot() {
     require('./devshots')({
       app, state, tstate, jstate, tracker: () => tracker, journal: () => journalWin, vaults, setExpanded, trk: { startBlock, toggleSub, addSub, blockToggleWithToast, saveLauncher, runLauncher }, createVault, openVault, unlockPersonal, lockAll, showSearch, showKeys, broadcast,
       sidebar: () => sidebar, search: () => searchWin, keys: () => keysWin,
-      quick: () => quickWin, toastWin: () => toastWin, showQuick, showToast, activity: () => activity, activitySummary,
+      quick: () => quickWin, toastWin: () => toastWin, showQuick, showToast, activity: () => activity, activitySummary, cfg: () => cfg,
     });
   }
 }

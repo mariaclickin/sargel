@@ -48,9 +48,10 @@ class Activity {
   }
 
   /** called about once a minute */
-  sample({ enabled, idleSec, locked, breakMin, now = new Date() }) {
+  sample({ enabled, idleSec, locked, breakMin, place, now = new Date() }) {
     const key = dateKey(now);
     const m = now.getHours() * 60 + now.getMinutes();
+    if (place) this.setPlace(key, place);
     if (!enabled) { this.mark(key, m, m + 1, 'o'); return; }
     if (locked) { this.mark(key, m, m + 1, 'b'); return; }
     if (idleSec >= breakMin * 60) {
@@ -67,6 +68,20 @@ class Activity {
     d.water = Math.max(0, Math.min(30, (d.water || 0) + delta));
     this.touch(d);
     return d.water;
+  }
+
+  /** where this computer worked that day: 'office' (default) or 'home' */
+  setPlace(key, place) {
+    const d = this.day(key);
+    if (d.place !== place) { d.place = place; this.touch(d); }
+  }
+
+  /** this computer was switched to office / home: today, and every day recorded before places existed, follow it */
+  switchPlace(place, today = dateKey()) {
+    for (const [k, d] of Object.entries(this.s.days)) {
+      if (k === today || !d.place) { d.place = place; this.touch(d); }
+    }
+    this.setPlace(today, place);
   }
 
   wasNotified(key, id) { return this.day(key).notified.includes(id); }
@@ -97,7 +112,7 @@ class Activity {
     const cut = dateKey(new Date(Date.now() - sinceDays * 864e5));
     return Object.entries(this.s.days)
       .filter(([k]) => k >= cut)
-      .map(([date, d]) => ({ id: `${date}|${this.s.machine}`, date, machine: this.s.machine, line: d.line, water: d.water || 0, updatedAt: d.updatedAt || 0 }));
+      .map(([date, d]) => ({ id: `${date}|${this.s.machine}`, date, machine: this.s.machine, line: d.line, water: d.water || 0, place: d.place === 'home' ? 'home' : 'office', updatedAt: d.updatedAt || 0 }));
   }
 }
 
@@ -199,4 +214,50 @@ function workday(line, breakMin, { ws, we, fix = null, nowMin = null } = {}) {
   };
 }
 
-module.exports = { Activity, combine, stats, focusStreak, workday, dateKey, DAY };
+/**
+ * The workday when the minutes come from computers set to office and/or home.
+ * office: from arrival to leaving, breaks included (workday above).
+ * home: only active time — mouse/keyboard minutes and the short pauses between them; no work hours, no overtime.
+ * Both on the same day: the office day, plus home activity outside the office span.
+ * A manual fix with arrival/leave times counts as an office day.
+ * Returns workday()'s fields + place ('office' | 'home' | 'mixed') + homeMinutes.
+ */
+function workdayPlaces({ office, home }, breakMin, opts = {}) {
+  const { fix = null, nowMin = null } = opts;
+  const worked = (l) => !!l && l.includes('w');
+  const manual = fix && (fix.type === 'vac' || fix.type === 'sick' || fix.arrive || fix.leave);
+  if (!worked(home) || manual) {
+    const line = worked(office) ? office : (office || home || '.'.repeat(DAY));
+    const merged = worked(home) && worked(office) ? combine([office, home]) : line;
+    return { ...workday(manual ? merged : line, breakMin, opts), place: 'office', homeMinutes: 0 };
+  }
+  if (!worked(office)) {
+    const st = stats(home, breakMin);
+    let leave = st.leave;
+    if (nowMin != null && leave != null && leave > nowMin) leave = nowMin;
+    const fixedBreaks = fix && typeof fix.breaks === 'number';
+    return {
+      total: st.active,
+      arrival: st.arrival,
+      leave,
+      early: 0,
+      late: 0,
+      overtime: 0,
+      off: null,
+      fixed: !!fix,
+      breakMinutes: fixedBreaks ? fix.breaks : st.breakMinutes,
+      breaks: fixedBreaks ? null : st.breaks,
+      place: 'home',
+      homeMinutes: st.active,
+    };
+  }
+  const wd = workday(office, breakMin, opts);
+  let rest = home;
+  if (wd.arrival != null && wd.leave != null && wd.leave > wd.arrival) {
+    rest = home.slice(0, wd.arrival) + '.'.repeat(wd.leave - wd.arrival) + home.slice(wd.leave);
+  }
+  const extra = stats(rest, breakMin).active;
+  return { ...wd, total: wd.total + extra, place: 'mixed', homeMinutes: extra };
+}
+
+module.exports = { Activity, combine, stats, focusStreak, workday, workdayPlaces, dateKey, DAY };

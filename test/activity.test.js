@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { Activity, combine, stats, focusStreak, workday, dateKey } = require('../src/activity');
+const { Activity, combine, stats, focusStreak, workday, workdayPlaces, dateKey } = require('../src/activity');
 
 const lineOf = (parts) => {
   const a = '.'.repeat(1440).split('');
@@ -89,4 +89,53 @@ test('water and notifications persist to disk', () => {
   assert.strictEqual(b.day(key).water, 2);
   assert.ok(b.wasNotified(key, 'h600'));
   assert.strictEqual(b.machine, a.machine);
+});
+
+test('home: only active time counts — 2h, a 3h break, 4h = 6h, no overtime', () => {
+  const home = lineOf([[H(8, 30), H(10, 30), 'w'], [H(10, 30), H(13, 30), 'b'], [H(13, 30), H(17, 30), 'w']]);
+  const d = workdayPlaces({ office: null, home }, 10, { ws: H(9), we: H(17) });
+  assert.strictEqual(d.place, 'home');
+  assert.strictEqual(d.total, H(6));
+  assert.strictEqual(d.overtime, 0);
+  assert.strictEqual(d.breakMinutes, H(3));
+  // the same minutes on an office computer: arrival to leaving, breaks included
+  const o = workdayPlaces({ office: home, home: null }, 10, { ws: H(9), we: H(17) });
+  assert.strictEqual(o.place, 'office');
+  assert.strictEqual(o.total, H(9));
+});
+
+test('home: a minute in the morning and one at night do not make a long day', () => {
+  const home = lineOf([[H(7), H(7, 1), 'w'], [H(10), H(12), 'w'], [H(22), H(22, 2), 'w']]);
+  const d = workdayPlaces({ office: null, home }, 10, { ws: H(9), we: H(17) });
+  assert.strictEqual(d.total, 1 + H(2) + 2);
+});
+
+test('office + home on the same day: home time outside the office span is added', () => {
+  const office = lineOf([[H(9), H(17), 'w']]);
+  const home = lineOf([[H(16), H(17), 'w'], [H(20), H(21), 'w']]); // 16–17 overlaps the office day
+  const d = workdayPlaces({ office, home }, 10, { ws: H(9), we: H(17) });
+  assert.strictEqual(d.place, 'mixed');
+  assert.strictEqual(d.homeMinutes, H(1));
+  assert.strictEqual(d.total, H(9));
+});
+
+test('home: vacation and manual times still win', () => {
+  const home = lineOf([[H(10), H(12), 'w']]);
+  const vac = workdayPlaces({ office: null, home }, 10, { ws: H(9), we: H(17), fix: { type: 'vac' } });
+  assert.strictEqual(vac.off, 'vac');
+  const fixed = workdayPlaces({ office: null, home }, 10, { ws: H(9), we: H(17), fix: { type: 'work', arrive: '09:00', leave: '13:00', breaks: null } });
+  assert.strictEqual(fixed.total, H(4));
+});
+
+test('switching a computer to home relabels today and older unlabelled days, not labelled ones', () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sargel-act-')), 'a.json');
+  const a = new Activity(file);
+  a.day('2026-01-01');
+  a.setPlace('2026-01-02', 'office');
+  a.switchPlace('home', '2026-01-03');
+  assert.strictEqual(a.day('2026-01-01').place, 'home');
+  assert.strictEqual(a.day('2026-01-02').place, 'office');
+  assert.strictEqual(a.day('2026-01-03').place, 'home');
+  const r = a.records(100000).find((x) => x.date === '2026-01-01');
+  assert.strictEqual(r.place, 'home');
 });

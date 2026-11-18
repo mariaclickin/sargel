@@ -17,6 +17,7 @@ const DEFAULTS = {
   workEnd: '17:00',
   workDays: [0, 1, 2, 3, 4], // Sunday..Thursday
   trackEnabled: true,
+  workPlace: 'office', // this computer: 'office' (arrival → leaving, work hours) | 'home' (active time only)
   breakMinutes: 10,
   avgWork: true, // "My day": average work per day under the week chart
   avgBreaks: true, // ... and average breaks per day
