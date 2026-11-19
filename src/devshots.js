@@ -1,5 +1,5 @@
 'use strict';
-/* Development only — scripted check of office / home counting, the handles settings and the slimmer Mac handles. Not packaged. */
+/* Development only — scripted check of the office / home switch, the one-row shortcuts and the flat Mac handles. Not packaged. */
 const fs = require('fs');
 const path = require('path');
 
@@ -29,11 +29,20 @@ module.exports = async function devShots(ctx) {
     fs.rmSync(vdir, { recursive: true, force: true });
     await ctx.createVault('personal', vdir, 'test-pass-123', false);
 
+    for (let i = 0; i < 11; i++) ctx.trk.saveLauncher({ launcher: { type: 'web', title: `קיצור ${i + 1}`, url: 'https://example.com', icon: 'globe', color: ['blue', 'pink', 'green', 'amber'][i % 4], key: String((i % 9) + 1) } });
+    ctx.broadcast();
+    await wait(300);
+
     // today: 2h in the morning, a 3h break, then work again until now
     const act = ctx.activity();
     const now = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
-    act.day(key(now)).line = line([[H(8, 30), H(10, 30), 'w'], [H(10, 30), H(13, 30), 'b'], [H(13, 30), Math.max(H(13, 31), nowMin), 'w']]);
+    // like a real home day: after midnight, the computer off all day, then work again in the last hour
+    act.day(key(now)).line = line([[H(0), H(1, 21), 'w'], [H(1, 21), H(3), 'b'], [Math.max(H(3), nowMin - 70), Math.max(H(3), nowMin - 40), 'w'], [Math.max(H(3), nowMin - 25), nowMin, 'w']]);
+    // yesterday on this (home) computer: an evening of work that went on past midnight into today 00:00–01:21
+    const y = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    act.day(key(y)).line = line([[H(19), H(21), 'w'], [H(22), H(23, 59) + 1, 'w']]);
+    act.day(key(y)).place = 'home';
     act.dirty = true;
 
     ctx.setExpanded(true, { explicit: true }, 'sidebar');
@@ -43,13 +52,22 @@ module.exports = async function devShots(ctx) {
     await wait(900);
     log(`office tiles: ${await text(sb, '.stats')}`);
     log(`office banner: ${await text(sb, '#workday')}`);
+    log(`shortcuts collapsed: ${await js(sb, `document.querySelectorAll('#launch .lbtn').length + ' buttons, last: ' + document.querySelector('#launch .lbtn:last-child').textContent.replace(/\s+/g, ' ').trim()`)}`);
+    log(`switch: ${await text(sb, '.pchip')}`);
     await snap(sb, '01-office');
+    await js(sb, `document.querySelector('[data-action="launch-more"]').click()`);
+    await wait(400);
+    log(`shortcuts open: ${await js(sb, `document.querySelectorAll('#launch .lbtn').length + ' buttons'`)}`);
+    await snap(sb, '01b-shortcuts-open');
+    await js(sb, `document.querySelector('[data-action="launch-more"]').click()`);
+    await wait(400);
 
     await js(sb, `document.querySelector('[data-action="place"]').click()`);
     await wait(1200);
-    log(`after click, button: ${await text(sb, '[data-action="place"]')} · config: ${ctx.cfg().get('workPlace')}`);
+    log(`after click, switch: ${await text(sb, '.pchip')} · config: ${ctx.cfg().get('workPlace')}`);
     log(`home tiles: ${await text(sb, '.stats')}`);
     log(`home banner: ${await text(sb, '#workday')}`);
+    { const sm = ctx.activitySummary(); log(`home today: ${sm.today.date} total ${sm.today.workday.total} shift ${sm.today.shift} · yesterday ${sm.week.find((d) => d.date === key(y))?.total}`); }
     log(`today place on disk: ${act.day(key(now)).place}`);
     await snap(sb, '02-home');
 
@@ -57,17 +75,27 @@ module.exports = async function devShots(ctx) {
     await js(sb, `openSettings()`);
     await wait(700);
     await snap(sb, '03-settings-handles');
+    await js(sb, `document.querySelector('.s-hg').closest('.sec').scrollIntoView()`);
+    await wait(300);
+    log(`home settings: goal row visible=${await js(sb, `!document.querySelector('.s-hg').closest('.set-row').classList.contains('hidden')`)}, hours row hidden=${await js(sb, `document.querySelector('.s-ws').closest('.set-row').classList.contains('hidden')`)}`);
+    await snap(sb, '03b-settings-home');
+    await js(sb, `const el = document.querySelector('.s-hg'); el.value = '360'; el.onchange()`);
+    await wait(500);
+    log(`home goal saved: ${ctx.cfg().get('homeGoal')}`);
     await js(sb, `const el = document.querySelector('.s-journal'); el.checked = false; el.onchange()`);
     await wait(700);
     log(`journal window visible after hiding: ${ctx.journal().isVisible()}`);
     await js(sb, `const el = document.querySelector('.s-journal'); el.checked = true; el.onchange()`);
     await wait(500);
     await js(sb, `closeModal()`);
+    await js(sb, `renderWorkday()`);
+    await wait(600);
+    log(`banner with 6h goal: ${await text(sb, '#workday')}`);
 
     // back to office for the next run
     await js(sb, `document.querySelector('[data-action="place"]').click()`);
     await wait(800);
-    log(`back: ${await text(sb, '[data-action="place"]')}`);
+    log(`back: ${await text(sb, '.pchip')}`);
 
     // what the slimmer Mac handle looks like (class only — the window size is set on a real Mac)
     ctx.setExpanded(false, {}, 'sidebar');

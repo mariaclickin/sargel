@@ -19,7 +19,7 @@ const isMac = process.platform === 'darwin';
 const ASSETS = path.join(__dirname, '..', 'assets');
 const RENDERER = path.join(__dirname, 'renderer');
 // the edge handle window (a bit wider than the visible strip, so it's easy to hover); slimmer on Mac
-const HANDLE = isMac ? { w: 14, h: 72 } : { w: 22, h: 104 };
+const HANDLE = isMac ? { w: 12, h: 56 } : { w: 22, h: 104 };
 const FILE_NAMES = { personal: 'sargel-personal.sargel', team: 'sargel-team.sargel' };
 const MIN_PASSWORD = 8;
 
@@ -105,7 +105,7 @@ function collapsedBounds(kind = 'sidebar') {
   // the pink handle sits right below the purple one, the blue one below the pink (or above, if there's no room)
   const steps = kind === 'tracker' ? 1 : kind === 'journal' ? 2 : 0;
   if (steps) {
-    const gap = HANDLE.h + (isMac ? 8 : 10);
+    const gap = HANDLE.h + (isMac ? 6 : 10);
     const below = y + steps * gap;
     y = below + HANDLE.h <= wa.y + wa.height ? below : y - steps * gap;
   }
@@ -535,6 +535,7 @@ function applyConfig(patch) {
   if ('breakMinutes' in patch) clean.breakMinutes = Math.round(clamp(patch.breakMinutes, 3, 60));
   if ('waterMinutes' in patch) clean.waterMinutes = Math.round(clamp(patch.waterMinutes, 15, 240));
   if ('waterGoal' in patch) clean.waterGoal = Math.round(clamp(patch.waterGoal, 1, 20));
+  if ('homeGoal' in patch) clean.homeGoal = Math.round(clamp(patch.homeGoal, 60, 720) / 30) * 30;
   if ('autoLockMinutes' in patch) clean.autoLockMinutes = Math.round(clamp(patch.autoLockMinutes, 0, 1440));
   if ('launchAtLogin' in patch) clean.launchAtLogin = !!patch.launchAtLogin;
   if (['system', 'light', 'dark'].includes(patch.theme)) clean.theme = patch.theme;
@@ -1517,6 +1518,9 @@ function deleteJob({ id }) {
 /* ───────── activity tracking + reminders ───────── */
 const hm = (s) => { const [h, m] = String(s).split(':').map(Number); return h * 60 + m; };
 const fmtH = (min) => `${Math.floor(min / 60)}:${String(min % 60).padStart(2, '0')}`;
+const isHome = () => cfg.get('workPlace') === 'home';
+/** a full day in minutes: the work hours at the office, the daily goal at home (no start / end time there) */
+const dayTarget = () => (isHome() ? clamp(cfg.get('homeGoal'), 60, 720) : hm(cfg.get('workEnd')) - hm(cfg.get('workStart')));
 
 function activityTick() {
   if (!activity) return;
@@ -1553,31 +1557,56 @@ function syncActivityToVault() {
  */
 function dayView(key) {
   const local = activity.day(key);
+  const next = nextDayKey(key);
   const byPlace = { office: [], home: [] };
-  byPlace[(local.place || cfg.get('workPlace')) === 'home' ? 'home' : 'office'].push(local.line);
+  // [line, line of the next day on the same computer (for the night part of a home day), was it home then]
+  const homeParts = [];
+  const add = (place, line, nextLine, nextPlace) => {
+    if (place === 'home') { byPlace.home.push(line); homeParts.push([line, nextPlace === 'office' ? null : nextLine]); } else byPlace.office.push(line);
+  };
+  const nextLocal = activity.s.days[next] || null;
+  add((local.place || cfg.get('workPlace')) === 'home' ? 'home' : 'office', local.line,
+    nextLocal && nextLocal.line, nextLocal ? (nextLocal.place || cfg.get('workPlace')) : null);
   let water = local.water || 0;
   const v = vaults.personal;
   if (v && v.unlocked) {
     for (const d of v.data.days) {
       if (d.deleted || d.date !== key || d.machine === activity.machine) continue;
-      byPlace[d.place === 'home' ? 'home' : 'office'].push(d.line);
+      const n = v.data.days.find((x) => !x.deleted && x.date === next && x.machine === d.machine);
+      add(d.place === 'home' ? 'home' : 'office', d.line, n && n.line, n ? (n.place === 'home' ? 'home' : 'office') : null);
       water += d.water || 0;
     }
+  }
+  // a day worked only from home runs 05:00 → 05:00: work after midnight belongs to the evening before.
+  // Its line is shifted — index 0 is 05:00, and `shift` tells the screen how to read the clock.
+  if (!byPlace.office.length && homeParts.length) {
+    const home = combine(homeParts.map(([l, n]) => l.slice(HOME_DAY_START) + (n || '.'.repeat(1440)).slice(0, HOME_DAY_START)));
+    return { line: home, office: null, home, water, shift: HOME_DAY_START };
   }
   return {
     line: combine([...byPlace.office, ...byPlace.home]),
     office: byPlace.office.length ? combine(byPlace.office) : null,
     home: byPlace.home.length ? combine(byPlace.home) : null,
     water,
+    shift: 0,
   };
 }
 
+/** a home day starts at 05:00 — until then it is still yesterday there */
+const HOME_DAY_START = 300;
+const nextDayKey = (key) => { const [y, m, d] = key.split('-').map(Number); return dateKey(new Date(y, m - 1, d + 1)); };
+const logicalNow = () => (isHome() ? new Date(Date.now() - HOME_DAY_START * 60000) : new Date());
+/** "today" on this computer: the calendar day at the office, the 05:00 → 05:00 day at home */
+const logicalToday = () => dateKey(logicalNow());
+/** minutes into the day, in the same frame as dayView(key).line */
+const minuteIn = (dv) => { const n = new Date(); const m = n.getHours() * 60 + n.getMinutes(); return dv.shift ? (m - dv.shift + 1440) % 1440 : m; };
+
 /** today's workday on all computers (office / home aware) */
 function todayWorkday() {
-  const key = dateKey();
-  const now = new Date();
-  return workdayPlaces(dayView(key), cfg.get('breakMinutes'), {
-    ws: hm(cfg.get('workStart')), we: hm(cfg.get('workEnd')), fix: getFix(key), nowMin: now.getHours() * 60 + now.getMinutes(),
+  const key = logicalToday();
+  const dv = dayView(key);
+  return workdayPlaces(dv, cfg.get('breakMinutes'), {
+    ws: hm(cfg.get('workStart')), we: hm(cfg.get('workEnd')), fix: getFix(key), nowMin: minuteIn(dv), shift: dv.shift,
   });
 }
 
@@ -1626,15 +1655,15 @@ function activitySummary({ weekOffset = 0 } = {}) {
   const breakMin = cfg.get('breakMinutes');
   const ws = hm(cfg.get('workStart'));
   const we = hm(cfg.get('workEnd'));
-  const target = we - ws;
+  const target = dayTarget();
   const workDays = cfg.get('workDays') || [];
-  const now = new Date();
+  const now = logicalNow(); // at home the day runs 05:00 → 05:00
   const todayKey = dateKey(now);
-  const nowMin = now.getHours() * 60 + now.getMinutes();
   const dayInfo = (k) => {
     const dv = k <= todayKey ? dayView(k) : { line: '.'.repeat(1440), water: 0 };
     const fix = getFix(k);
-    const wd = workdayPlaces(dv, breakMin, { ws, we, fix, nowMin: k === todayKey ? nowMin : null });
+    const wd = workdayPlaces(dv, breakMin, { ws, we, fix, nowMin: k === todayKey ? minuteIn(dv) : null, shift: dv.shift || 0 });
+    if (wd.off) wd.total = target; // vacation / sick count as a full day (the daily goal at home)
     return { dv, fix, wd };
   };
 
@@ -1649,7 +1678,7 @@ function activitySummary({ weekOffset = 0 } = {}) {
       const k = dateKey(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
       const { dv, fix, wd } = k === todayKey ? t : dayInfo(k);
       if (k <= todayKey) total += wd.total;
-      days.push({ date: k, dow: i, future: k > todayKey, workday: workDays.includes(i), total: wd.total, overtime: wd.overtime, breaks: wd.breakMinutes || 0, off: wd.off, fixed: !!fix && !wd.off, water: dv.water });
+      days.push({ date: k, dow: i, future: k > todayKey, workday: workDays.includes(i), total: wd.total, overtime: wd.overtime, breaks: wd.breakMinutes || 0, off: wd.off, place: wd.place, fixed: !!fix && !wd.off, water: dv.water });
     }
     return { days, total };
   };
@@ -1659,7 +1688,10 @@ function activitySummary({ weekOffset = 0 } = {}) {
   // per-day averages: only days that were worked and are over (no vacation / sick / empty days, not today)
   const counted = week.filter((d) => !d.off && d.total > 0 && d.date < todayKey);
   const avg = (f) => (counted.length ? Math.round(counted.reduce((a, d) => a + f(d), 0) / counted.length) : null);
-  const weekAvg = { days: counted.length, work: avg((d) => d.total), breaks: avg((d) => d.breaks) };
+  // breaks only mean something at the office — home days have no breaks, just time off the computer
+  const atOffice = counted.filter((d) => d.place !== 'home');
+  const breaksAvg = atOffice.length ? Math.round(atOffice.reduce((a, d) => a + d.breaks, 0) / atOffice.length) : null;
+  const weekAvg = { days: counted.length, work: avg((d) => d.total), breaks: breaksAvg };
   // overtime this month (days up to today)
   let monthOver = 0;
   const m0 = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -1678,6 +1710,7 @@ function activitySummary({ weekOffset = 0 } = {}) {
       stats: stats(t.dv.line, breakMin),
       workday: t.wd,
       focus: focusStreak(t.dv.line, breakMin),
+      shift: t.dv.shift || 0, // the line (and stats / focus) start at this clock minute
       fix: t.fix,
     },
     week,
@@ -1696,11 +1729,10 @@ function dayForEdit({ date }) {
   const breakMin = cfg.get('breakMinutes');
   const ws = hm(cfg.get('workStart'));
   const we = hm(cfg.get('workEnd'));
-  const isToday = date === dateKey();
-  const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
-  const dv = date <= dateKey() ? dayView(date) : { line: '.'.repeat(1440) };
-  const measured = workdayPlaces(dv, breakMin, { ws, we, nowMin: isToday ? nowMin : null });
-  return { day: { date, measured, fix: getFix(date), future: date > dateKey() } };
+  const isToday = date === logicalToday();
+  const dv = date <= logicalToday() ? dayView(date) : { line: '.'.repeat(1440) };
+  const measured = workdayPlaces(dv, breakMin, { ws, we, nowMin: isToday ? minuteIn(dv) : null, shift: dv.shift || 0 });
+  return { day: { date, measured, fix: getFix(date), future: date > logicalToday() } };
 }
 
 function remindersTick() {
@@ -1708,29 +1740,37 @@ function remindersTick() {
   carryChecks();
   dateReminders();
   const now = new Date();
-  if (!(cfg.get('workDays') || []).includes(now.getDay())) return;
-  const key = dateKey(now);
+  const day = logicalNow(); // at home, 01:00 still belongs to yesterday's day
+  if (!(cfg.get('workDays') || []).includes(day.getDay())) return;
+  const key = dateKey(day);
   const todayFix = getFix(key);
   if (todayFix && (todayFix.type === 'vac' || todayFix.type === 'sick')) return; // day off: no reminders
   const m = now.getHours() * 60 + now.getMinutes();
   const ws = hm(cfg.get('workStart'));
   const we = hm(cfg.get('workEnd'));
-  const total = Math.max(1, Math.round((we - ws) / 60));
+  const total = Math.max(1, Math.round(dayTarget() / 60));
   const hourly = !!cfg.get('hourlyNotify');
   const water = !!cfg.get('waterReminder');
   const wm = cfg.get('waterMinutes');
   const waterWithHour = hourly && water && wm === 60;
 
-  const home = cfg.get('workPlace') === 'home';
+  const home = isHome();
   const events = [];
-  if (hourly && home) {
-    // home: no work hours — one toast for every full hour actually worked
-    const done = Math.min(total, Math.floor(todayWorkday().total / 60));
-    for (let h = 1; h <= done; h++) events.push({ id: `a${h}`, t: m, h, kind: h >= total ? 'end' : 'hour' });
-  } else if (hourly) {
-    for (let t = ws + 60; t <= we; t += 60) events.push({ id: `h${t}`, t, h: Math.round((t - ws) / 60), kind: t >= we ? 'end' : 'hour' });
+  if (home) {
+    // home: no work hours — toasts follow the time actually worked (a 3-hour break brings none)
+    const worked = (hourly || water) ? todayWorkday().total : 0;
+    if (hourly) {
+      const done = Math.min(total, Math.floor(worked / 60));
+      for (let h = 1; h <= done; h++) events.push({ id: `a${h}`, t: m, h, kind: h >= total ? 'end' : 'hour' });
+    }
+    if (water && !waterWithHour) {
+      const cups = Math.min(30, Math.floor(worked / Math.max(15, wm)));
+      for (let n = 1; n <= cups; n++) events.push({ id: `aw${n}`, t: m, kind: 'water' });
+    }
+  } else {
+    if (hourly) for (let t = ws + 60; t <= we; t += 60) events.push({ id: `h${t}`, t, h: Math.round((t - ws) / 60), kind: t >= we ? 'end' : 'hour' });
+    if (water && !waterWithHour) for (let t = ws + wm; t < we; t += wm) events.push({ id: `w${t}`, t, kind: 'water' });
   }
-  if (water && !waterWithHour) for (let t = ws + wm; t < we; t += wm) events.push({ id: `w${t}`, t, kind: 'water' });
   // due = time passed (shown up to 45 min late, e.g. after a break) and not shown yet
   const due = events.filter((e) => m >= e.t && m < e.t + 45 && !activity.wasNotified(key, e.id)).sort((a, b) => a.t - b.t);
   if (!due.length) return;
@@ -1751,8 +1791,8 @@ function remindersTick() {
   } else if (e.kind === 'hour') {
     const { h } = e;
     payload = {
-      kind: 'hour', title: `שעה ${h} מתוך ${total} הושלמה`,
-      body: `${Math.round((h / total) * 100)}% מהיום · נשארו ${total - h} שעות`,
+      kind: 'hour', title: home ? `עבדת ${h} ${h === 1 ? 'שעה' : 'שעות'} מתוך ${total}` : `שעה ${h} מתוך ${total} הושלמה`,
+      body: `${Math.round((h / total) * 100)}% ${home ? 'מהיעד' : 'מהיום'} · נשארו ${total - h} שעות`,
       water: waterWithHour, waterText: `💧 זמן לכוס מים · ${dv.water}/${goal} היום`,
     };
   } else {
@@ -2009,7 +2049,7 @@ function registerIpc() {
   handle('activity:get', ({ weekOffset }) => ({ summary: activitySummary({ weekOffset }) }));
   handle('activity:today', () => {
     const wd = activity ? todayWorkday() : { total: 0 };
-    return { worked: wd.total, target: hm(cfg.get('workEnd')) - hm(cfg.get('workStart')) };
+    return { worked: wd.total, target: dayTarget() };
   });
   handle('activity:day', (a) => dayForEdit(a));
   handle('activity:fix', (a) => saveDayFix(a));
@@ -2041,7 +2081,13 @@ function registerIpc() {
   handle('toast:close', () => { if (toastWin) toastWin.hide(); });
   handle('toast:test', ({ kind }) => {
     if (kind === 'water') showToast({ kind: 'water', title: 'זמן לכוס מים 💧', body: 'כך תיראה התזכורת', water: true });
-    else showToast({ kind: 'hour', title: 'שעה 3 מתוך 8 הושלמה', body: '37% מהיום · נשארו 5 שעות', water: !!cfg.get('waterReminder'), waterText: '💧 זמן לכוס מים' });
+    else {
+      const total = Math.max(1, Math.round(dayTarget() / 60));
+      const pct = Math.round((3 / total) * 100);
+      showToast(isHome()
+        ? { kind: 'hour', title: `עבדת 3 שעות מתוך ${total}`, body: `${pct}% מהיעד · נשארו ${total - 3} שעות`, water: !!cfg.get('waterReminder'), waterText: '💧 זמן לכוס מים' }
+        : { kind: 'hour', title: `שעה 3 מתוך ${total} הושלמה`, body: `${pct}% מהיום · נשארו ${total - 3} שעות`, water: !!cfg.get('waterReminder'), waterText: '💧 זמן לכוס מים' });
+    }
   });
   handle('data:reorder', (a) => reorder(a));
 

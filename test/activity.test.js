@@ -97,7 +97,8 @@ test('home: only active time counts — 2h, a 3h break, 4h = 6h, no overtime', (
   assert.strictEqual(d.place, 'home');
   assert.strictEqual(d.total, H(6));
   assert.strictEqual(d.overtime, 0);
-  assert.strictEqual(d.breakMinutes, H(3));
+  assert.strictEqual(d.breakMinutes, 0, 'at home a quiet stretch is not a break');
+  assert.strictEqual(d.sessions, 2);
   // the same minutes on an office computer: arrival to leaving, breaks included
   const o = workdayPlaces({ office: home, home: null }, 10, { ws: H(9), we: H(17) });
   assert.strictEqual(o.place, 'office');
@@ -138,4 +139,23 @@ test('switching a computer to home relabels today and older unlabelled days, not
   assert.strictEqual(a.day('2026-01-03').place, 'home');
   const r = a.records(100000).find((x) => x.date === '2026-01-01');
   assert.strictEqual(r.place, 'home');
+});
+
+test('home: a night of work and an evening, with the computer off all day in between', () => {
+  // like a real day: 00:00–01:21 after midnight, then nothing until the evening (lid closed / asleep)
+  const home = lineOf([[H(0), H(1, 21), 'w'], [H(1, 21), H(3), 'b'], [H(19), H(19, 30), 'w'], [H(19, 30), H(19, 33), '.'], [H(19, 33), H(19, 50), 'w'], [H(21, 30), H(21, 56), 'w']]);
+  const d = workdayPlaces({ office: null, home }, 10, { ws: H(9), we: H(17) });
+  assert.strictEqual(d.total, 81 + 30 + 3 + 17 + 26);
+  assert.strictEqual(d.breakMinutes, 0);
+  assert.strictEqual(d.sessions, 3);
+});
+
+test('home day from 05:00: a shifted line reports clock times', () => {
+  // shifted line: index 0 = 05:00. Work 19:00–21:00 (index 840–960) and 00:00–01:21 after midnight (index 1140–1221)
+  const home = lineOf([[840, 960, 'w'], [1140, 1221, 'w']]);
+  const d = workdayPlaces({ office: null, home }, 10, { ws: H(9), we: H(17), shift: 300 });
+  assert.strictEqual(d.total, 120 + 81);
+  assert.strictEqual(d.arrival, H(19));
+  assert.strictEqual(d.leave, H(1, 21));
+  assert.strictEqual(d.sessions, 2);
 });

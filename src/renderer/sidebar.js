@@ -601,17 +601,29 @@ async function renderDay() {
   const c = S.config;
   const goal = c.waterGoal || 8;
   const { ws, we, target } = s;
-  const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
-  const arr = wd.arrival != null ? wd.arrival : t.arrival;
-  const lv = wd.leave != null ? wd.leave : t.leave;
-  const from = Math.max(0, Math.min(ws - 60, arr != null ? Math.floor(arr / 60) * 60 : ws - 60));
-  const to = Math.min(1440, Math.max(we + 60, lv != null ? Math.ceil(lv / 60) * 60 : we + 60));
+  // a home day runs 05:00 → 05:00: its line starts at minute `sh` of the clock (0 at the office)
+  const sh = s.today.shift || 0;
+  const ck = (i) => clock((i + sh) % 1440);
+  const nowMin = (new Date().getHours() * 60 + new Date().getMinutes() - sh + 1440) % 1440;
+  let from;
+  let to;
+  if (sh) {
+    // no work hours at home: show from the first activity to the last (or now)
+    from = t.arrival != null ? Math.max(0, Math.floor(t.arrival / 60) * 60 - 60) : Math.max(0, Math.floor(nowMin / 60) * 60 - 180);
+    to = Math.min(1440, Math.max(t.leave != null ? Math.ceil(t.leave / 60) * 60 + 60 : 0, Math.ceil((nowMin + 1) / 60) * 60, from + 360));
+  } else {
+    const arr = wd.arrival != null ? wd.arrival : t.arrival;
+    const lv = wd.leave != null ? wd.leave : t.leave;
+    from = Math.max(0, Math.min(ws - 60, arr != null ? Math.floor(arr / 60) * 60 : ws - 60));
+    to = Math.min(1440, Math.max(we + 60, lv != null ? Math.ceil(lv / 60) * 60 : we + 60));
+  }
 
   // timeline: work before the start time is shown lighter ("early")
   const line = s.today.line;
   const chAt = (i) => {
     let ch = line[i];
-    if (ch === '.' && t.arrival != null && i > t.arrival && i < t.leave) ch = 'b';
+    // at home a quiet stretch is just "not working" (empty), never a break
+    if (wd.place === 'home') { if (ch === 'b') ch = '.'; } else if (ch === '.' && t.arrival != null && i > t.arrival && i < t.leave) ch = 'b';
     if (ch === 'w' && i < ws && wd.place !== 'home') ch = 'e'; // at home there is no start time
     return ch;
   };
@@ -655,9 +667,9 @@ async function renderDay() {
   if (c.avgBreaks !== false) avgs.push(['ממוצע הפסקות ליום', s.weekAvg.breaks]);
 
   box.innerHTML = `
-    <div class="day-track ${s.enabled ? '' : 'off'}">
+    <div class="day-track ${s.enabled ? '' : 'off'} ${home ? 'home' : ''}">
       <span>${icon('clock')} מעקב שעות: <b>${s.enabled ? 'פועל' : 'כבוי'}</b></span>
-      <button class="place-btn" data-action="place" title="${home ? 'המחשב הזה נספר כעבודה מהבית — לחיצה: משרד' : 'המחשב הזה נספר כמשרד — לחיצה: בית'}">${icon(home ? 'home' : 'office')} ${home ? 'בית' : 'משרד'}</button>
+      <button class="pchip ${home ? 'home' : ''}" data-action="place" title="${home ? 'המחשב הזה נספר כבית — לחיצה: משרד' : 'המחשב הזה נספר כמשרד — לחיצה: בית'}">${icon(home ? 'home' : 'office')}${home ? 'בית' : 'משרד'}<span class="swap">${icon('swap')}</span></button>
     </div>
     ${s.enabled ? '' : `<p class="muted small center">כשהמעקב כבוי לא נרשם דבר. מפעילים אותו בהגדרות ← מעקב שעות.</p>`}
     ${wd.off ? `
@@ -665,22 +677,28 @@ async function renderDay() {
         <button class="ghost sm" data-action="day-edit" data-date="${s.today.date}">שינוי</button></div>` : `
       <div class="stats ${wd.place === 'home' ? 'stats3' : 'stats4'}">
         <div class="stat"><b>${fmtMin(wd.total)}</b><span>${wd.place === 'home' ? 'זמן עבודה<br>בפועל' : 'זמן עבודה<br>כולל הפסקות'}</span></div>
-        <div class="stat"><b>${fmtMin(wd.breakMinutes || 0)}</b><span>הפסקות${wd.breaks != null ? `<br>(${wd.breaks})` : ''}</span></div>
+        ${wd.place === 'home'
+          ? `<div class="stat"><b>${wd.sessions || 0}</b><span>פרקי<br>עבודה</span></div>`
+          : `<div class="stat"><b>${fmtMin(wd.breakMinutes || 0)}</b><span>הפסקות${wd.breaks != null ? `<br>(${wd.breaks})` : ''}</span></div>`}
         ${wd.place === 'home' ? '' : `<div class="stat"><b class="acc">${wd.overtime ? `+${fmtMin(wd.overtime)}` : '0:00'}</b><span>שעות<br>נוספות</span></div>`}
         <div class="stat hl"><b class="acc">${fmtMin(fo.len || 0)}</b><span>רצף ריכוז<br>הכי ארוך</span></div>
       </div>
       ${wd.place === 'home' ? `<p class="muted small day-note">${icon('home')} מצב בית: נספר רק זמן הפעילות, בלי שעות התחלה וסוף</p>` : ''}
       ${wd.place === 'mixed' && wd.homeMinutes ? `<p class="muted small day-note">${icon('home')} <b class="acc">+${fmtMin(wd.homeMinutes)}</b> מהבית, מחוץ לשעות המשרד</p>` : ''}
-      ${fo.len ? `<p class="muted small day-note">${icon('bolt')} הרצף הארוך: ${clock(fo.start)}–${clock(fo.end)} בלי הפסקה של ${s.breakMin}+ דק׳</p>` : ''}
+      ${fo.len ? `<p class="muted small day-note">${icon('bolt')} הרצף הארוך: <span dir="ltr">${ck(fo.start)}–${ck(fo.end)}</span> בלי הפסקה של ${s.breakMin}+ דק׳</p>` : ''}
       ${wd.early ? `<p class="muted small day-note">${icon('sun')} הגעת ב-${clock(wd.arrival)} · <b class="acc">+${fmtMin(wd.early)} לפני ${clock(ws)}</b> נספר כשעות נוספות</p>` : ''}
       ${wd.late ? `<p class="muted small day-note">${icon('clock')} <b class="acc">+${fmtMin(wd.late)} אחרי ${clock(we)}</b> נספר כשעות נוספות</p>` : ''}`}
     <div class="sec-t">ציר היום</div>
-    <div class="tl">${runs.map(([a, b, ch]) => `<div class="tl-${ch === 'w' ? 'w' : ch === 'e' ? 'e' : ch === 'b' ? 'b' : ch === 'o' ? 'o' : 'n'}" style="width:${((b - a) / span) * 100}%" title="${clock(a)}–${clock(b)}"></div>`).join('')}
+    <div class="tl">${runs.map(([a, b, ch]) => `<div class="tl-${ch === 'w' ? 'w' : ch === 'e' ? 'e' : ch === 'b' ? 'b' : ch === 'o' ? 'o' : 'n'}" style="width:${((b - a) / span) * 100}%" title="${ck(a)}–${ck(b)}"></div>`).join('')}
       ${nowMin >= from && nowMin <= to ? `<div class="tl-now" style="left:${((nowMin - from) / span) * 100}%"></div>` : ''}</div>
-    <div class="tl-axis">${ticks.map((m) => `<span style="left:${((m - from) / span) * 100}%">${clock(m)}</span>`).join('')}</div>
-    <div class="tl-legend"><span><i class="lg-w"></i>עבודה</span>${wd.place === 'home' ? '' : `<span><i class="lg-e"></i>לפני ${clock(ws)}</span>`}<span><i class="lg-b"></i>הפסקה (${s.breakMin}+ דק׳)</span><span><i class="lg-o"></i>לא נמדד</span></div>
+    <div class="tl-axis">${ticks.map((m) => `<span style="left:${((m - from) / span) * 100}%">${ck(m)}</span>`).join('')}</div>
+    <div class="tl-legend">${wd.place === 'home'
+      ? '<span><i class="lg-w"></i>עבודה</span><span><i class="lg-n"></i>בלי פעילות</span><span><i class="lg-o"></i>מעקב כבוי</span>'
+      : `<span><i class="lg-w"></i>עבודה</span><span><i class="lg-e"></i>לפני ${clock(ws)}</span><span><i class="lg-b"></i>הפסקה (${s.breakMin}+ דק׳)</span><span><i class="lg-o"></i>לא נמדד</span>`}</div>
     <div class="kv"><span>${wd.place === 'home' ? 'התחלה ראשונה' : 'הגעה'}${wd.fixed && !wd.off ? ' <small class="acc">(תוקן ידנית)</small>' : ''}</span><b dir="ltr">${wd.arrival != null ? clock(wd.arrival) : '—'} <button class="icon-btn sm kv-edit" data-action="day-edit" data-date="${s.today.date}" title="תיקון היום">${icon('edit')}</button></b></div>
-    <div class="kv"><span>הפסקה הכי ארוכה</span><b>${t.longest ? `${t.longest} דק׳ (${clock(t.longestAt)})` : '—'}</b></div>
+    ${wd.place === 'home'
+      ? `<div class="kv"><span>סיום אחרון</span><b dir="ltr">${wd.leave != null ? clock(wd.leave) : '—'}</b></div>`
+      : `<div class="kv"><span>הפסקה הכי ארוכה</span><b>${t.longest ? `${t.longest} דק׳ (${clock(t.longestAt)})` : '—'}</b></div>`}
     <div class="kv"><span>השבוע עד עכשיו</span><b>${fmtMin(s.weekTotal)} / ${fmtMin(s.weekTarget)}</b></div>
     <div class="kv"><span>שעות נוספות החודש</span><b class="acc">${s.monthOver ? `+${fmtMin(s.monthOver)}` : '0:00'}</b></div>
     <div class="sec-t">${icon('droplet')} מים היום <span class="muted">${s.today.water} / ${goal} כוסות</span></div>
@@ -784,15 +802,31 @@ function renderMain() {
   renderMode();
 }
 
+/* shortcut buttons: one row, the rest behind "+N עוד" (opened state remembered on this computer) */
+let launchOpen = false;
+try { launchOpen = localStorage.getItem('launchOpen') === '1'; } catch { /* ignore */ }
 function renderLaunch() {
+  const box = $('#launch');
   const ls = S.data.launchers;
-  $('#launch').innerHTML = ls.map((l) => `
+  const tile = (l) => `
     <button class="lbtn" data-action="launch" data-lid="${l.id}" title="${esc(l.title)}${l.key ? ` · ${esc(S.launcherHotkeyLabel)} ואז ${l.key}` : ''} · קליק ימני לעריכה">
       <span class="ltile" ${tileStyle(l.color)}>${icon(l.icon || 'bolt')}${l.key ? `<span class="lkey">${l.key}</span>` : ''}</span>
       <span class="lname">${esc(l.title)}</span>
-    </button>`).join('')
-    + `<button class="lbtn add" data-action="add-launch" title="כפתור חדש"><span class="ltile">${icon('plus')}</span><span class="lname">הוספה</span></button>`;
+    </button>`;
+  const add = `<button class="lbtn add" data-action="add-launch" title="כפתור חדש"><span class="ltile">${icon('plus')}</span><span class="lname">הוספה</span></button>`;
+  // how many 54px buttons (+4px gap) fit in one row
+  const perRow = Math.max(3, Math.floor(((box.clientWidth || 360) - 24 + 4) / 58));
+  if (ls.length + 1 <= perRow) { box.innerHTML = ls.map(tile).join('') + add; return; }
+  if (launchOpen) {
+    box.innerHTML = ls.map(tile).join('') + add
+      + `<button class="lbtn more" data-action="launch-more" title="להציג שורה אחת"><span class="ltile">${icon('chevron')}</span><span class="lname">פחות</span></button>`;
+    return;
+  }
+  const shown = perRow - 1;
+  box.innerHTML = ls.slice(0, shown).map(tile).join('')
+    + `<button class="lbtn more" data-action="launch-more" title="להציג את כל הקיצורים"><span class="ltile" dir="ltr">+${ls.length - shown}</span><span class="lname">עוד</span></button>`;
 }
+window.addEventListener('resize', () => { if (view === 'main') renderLaunch(); });
 
 async function runLaunch(id, el) {
   const r = await api.call('launch:run', { id });
@@ -1007,6 +1041,11 @@ async function onPanelClick(e) {
     case 'cfilter': colorFilter = a.dataset.c === colorFilter ? null : (a.dataset.c || null); renderList(); break;
     case 'launch': runLaunch(a.dataset.lid, a.querySelector('.ltile')); break;
     case 'add-launch': openLauncherEditor(null); break;
+    case 'launch-more':
+      launchOpen = !launchOpen;
+      try { localStorage.setItem('launchOpen', launchOpen ? '1' : '0'); } catch { /* ignore */ }
+      renderLaunch();
+      break;
     case 'keyboard': openKeyboard(); break;
     case 'pin': api.call('ui:pin', { pinned: !S.ui.pinned }); break;
     case 'lock': api.call('vault:lock'); break;
@@ -1627,6 +1666,7 @@ const TIME_OPTS = Array.from({ length: 38 }, (_, i) => clock(300 + i * 30)).map(
 
 function openSettings() {
   const c = S.config;
+  const homePc = c.workPlace === 'home';
   const p = S.vaults.personal;
   const t = S.vaults.team;
   const lockOpts = [[5, '5 דקות'], [10, '10 דקות'], [15, '15 דקות'], [30, 'חצי שעה'], [60, 'שעה'], [240, '4 שעות'], [0, 'אף פעם']];
@@ -1667,11 +1707,17 @@ function openSettings() {
 
     <div class="sec">
       <h4>${icon('sun')} יום עבודה ותזכורות</h4>
-      <div class="set-row"><span>שעות</span><select class="s-ws inp-sm">${TIME_OPTS}</select> <span class="muted">עד</span> <select class="s-we inp-sm">${TIME_OPTS}</select></div>
+      <div class="day-track set-place ${homePc ? 'home' : ''}"><span>המחשב הזה נספר כ־</span>
+        <button class="pchip ${homePc ? 'home' : ''}" data-s="place">${icon(homePc ? 'home' : 'office')}${homePc ? 'בית' : 'משרד'}<span class="swap">${icon('swap')}</span></button></div>
+      <div class="set-row ${homePc ? 'hidden' : ''}"><span>שעות</span><select class="s-ws inp-sm">${TIME_OPTS}</select> <span class="muted">עד</span> <select class="s-we inp-sm">${TIME_OPTS}</select></div>
+      <div class="set-row ${homePc ? '' : 'hidden'}"><span>יעד עבודה ביום</span><select class="s-hg">${[4, 5, 6, 7, 8, 9, 10].map((h) => `<option value="${h * 60}">${h} שעות</option>`).join('')}</select></div>
+      ${homePc ? '<p class="muted small" style="margin:-2px 0 6px">בלי שעות התחלה וסוף — נספר כל רגע של פעילות, מתי שעובדים.</p>' : ''}
       <div class="set-row"><span>ימים</span><div class="days">${DOW.map((d, i) => `<button class="day-b" data-d="${i}">${d}</button>`).join('')}</div></div>
-      <label class="check"><input type="checkbox" class="s-hourly"><span>התראה בכל שעה עגולה <small>"שעה 3 מתוך 8 הושלמה"</small></span></label>
+      <label class="check"><input type="checkbox" class="s-hourly"><span>${homePc ? 'התראה על כל שעת עבודה שהושלמה <small>"עבדת 3 שעות מתוך 8"</small>' : 'התראה בכל שעה עגולה <small>"שעה 3 מתוך 8 הושלמה"</small>'}</span></label>
       <label class="check"><input type="checkbox" class="s-water"><span>תזכורת לשתות מים</span></label>
-      <div class="set-row"><span>כל כמה זמן</span><select class="s-wm"><option value="45">45 דקות</option><option value="60">שעה (יחד עם התראת השעה)</option><option value="90">שעה וחצי</option><option value="120">שעתיים</option></select></div>
+      <div class="set-row"><span>כל כמה זמן</span><select class="s-wm">${homePc
+        ? '<option value="45">45 דקות של עבודה</option><option value="60">שעה של עבודה</option><option value="90">שעה וחצי של עבודה</option><option value="120">שעתיים של עבודה</option>'
+        : '<option value="45">45 דקות</option><option value="60">שעה (יחד עם התראת השעה)</option><option value="90">שעה וחצי</option><option value="120">שעתיים</option>'}</select></div>
       <div class="set-row"><span>יעד כוסות ביום</span><select class="s-wg">${[4, 5, 6, 7, 8, 9, 10, 12].map((n) => `<option value="${n}">${n}</option>`).join('')}</select></div>
       <div class="btns"><button class="ghost" data-s="test-toast">${icon('bell')} איך זה ייראה</button></div>
     </div>
@@ -1680,6 +1726,7 @@ function openSettings() {
       <h4>${icon('clock')} מעקב שעות</h4>
       <label class="check"><input type="checkbox" class="s-track"><span>מעקב שעות פועל <small>נמדד רק אם יש פעילות עכבר/מקלדת — לא אילו תוכנות או אתרים</small></span></label>
       <div class="set-row"><span>הפסקה אחרי</span><select class="s-break"><option value="5">5 דקות בלי פעילות</option><option value="10">10 דקות בלי פעילות</option><option value="15">15 דקות בלי פעילות</option></select></div>
+      ${homePc ? '<p class="muted small" style="margin:-2px 0 6px">בבית: עצירה קצרה מזה נספרת כעבודה, וארוכה ממנה היא הפסקה ולא נספרת.</p>' : ''}
       <div class="lbl-t" style="margin:6px 0 4px">מתחת לגרף השבוע</div>
       <label class="check"><input type="checkbox" class="s-avgw"><span>ממוצע עבודה ליום</span></label>
       <label class="check"><input type="checkbox" class="s-avgb"><span>ממוצע הפסקות ליום</span></label>
@@ -1753,6 +1800,23 @@ function openSettings() {
     const jk = $('.s-journal', m);
     jk.checked = c.journalEnabled !== false;
     jk.onchange = () => set({ journalEnabled: jk.checked });
+
+    // office / home for this computer — the section above changes with it, so reopen the settings
+    $('[data-s="place"]', m).onclick = async () => {
+      const wp = S.config.workPlace === 'home' ? 'office' : 'home';
+      await set({ workPlace: wp });
+      S.config.workPlace = wp;
+      const top = $('.modal', document)?.scrollTop || 0;
+      closeModal();
+      openSettings();
+      const md = $('.modal', document);
+      if (md) md.scrollTop = top;
+      if (mode === 'day') renderDay();
+      renderWorkday();
+    };
+    const hg = $('.s-hg', m);
+    hg.value = String(c.homeGoal || 480);
+    hg.onchange = () => set({ homeGoal: Number(hg.value) });
 
     const ws = $('.s-ws', m);
     const we = $('.s-we', m);
