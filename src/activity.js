@@ -235,7 +235,9 @@ function sessions(line, breakMin) {
  * Returns workday()'s fields + place ('office' | 'home' | 'mixed') + homeMinutes.
  */
 function workdayPlaces({ office, home }, breakMin, opts = {}) {
-  const { fix = null, nowMin = null } = opts;
+  // shift: the home line starts at that minute of the clock (a home day runs 05:00 → 05:00); nowMin is in the same frame
+  const { fix = null, nowMin = null, shift = 0 } = opts;
+  const clockOf = (i) => (i == null ? null : (i + shift) % DAY);
   const worked = (l) => !!l && l.includes('w');
   const manual = fix && (fix.type === 'vac' || fix.type === 'sick' || fix.arrive || fix.leave);
   if (!worked(home) || manual) {
@@ -250,8 +252,8 @@ function workdayPlaces({ office, home }, breakMin, opts = {}) {
     if (nowMin != null && leave != null && leave > nowMin) leave = nowMin;
     return {
       total: st.active,
-      arrival: st.arrival,
-      leave,
+      arrival: clockOf(st.arrival), // clock minutes, for showing
+      leave: clockOf(leave),
       early: 0,
       late: 0,
       overtime: 0,

@@ -1557,31 +1557,56 @@ function syncActivityToVault() {
  */
 function dayView(key) {
   const local = activity.day(key);
+  const next = nextDayKey(key);
   const byPlace = { office: [], home: [] };
-  byPlace[(local.place || cfg.get('workPlace')) === 'home' ? 'home' : 'office'].push(local.line);
+  // [line, line of the next day on the same computer (for the night part of a home day), was it home then]
+  const homeParts = [];
+  const add = (place, line, nextLine, nextPlace) => {
+    if (place === 'home') { byPlace.home.push(line); homeParts.push([line, nextPlace === 'office' ? null : nextLine]); } else byPlace.office.push(line);
+  };
+  const nextLocal = activity.s.days[next] || null;
+  add((local.place || cfg.get('workPlace')) === 'home' ? 'home' : 'office', local.line,
+    nextLocal && nextLocal.line, nextLocal ? (nextLocal.place || cfg.get('workPlace')) : null);
   let water = local.water || 0;
   const v = vaults.personal;
   if (v && v.unlocked) {
     for (const d of v.data.days) {
       if (d.deleted || d.date !== key || d.machine === activity.machine) continue;
-      byPlace[d.place === 'home' ? 'home' : 'office'].push(d.line);
+      const n = v.data.days.find((x) => !x.deleted && x.date === next && x.machine === d.machine);
+      add(d.place === 'home' ? 'home' : 'office', d.line, n && n.line, n ? (n.place === 'home' ? 'home' : 'office') : null);
       water += d.water || 0;
     }
+  }
+  // a day worked only from home runs 05:00 → 05:00: work after midnight belongs to the evening before.
+  // Its line is shifted — index 0 is 05:00, and `shift` tells the screen how to read the clock.
+  if (!byPlace.office.length && homeParts.length) {
+    const home = combine(homeParts.map(([l, n]) => l.slice(HOME_DAY_START) + (n || '.'.repeat(1440)).slice(0, HOME_DAY_START)));
+    return { line: home, office: null, home, water, shift: HOME_DAY_START };
   }
   return {
     line: combine([...byPlace.office, ...byPlace.home]),
     office: byPlace.office.length ? combine(byPlace.office) : null,
     home: byPlace.home.length ? combine(byPlace.home) : null,
     water,
+    shift: 0,
   };
 }
 
+/** a home day starts at 05:00 — until then it is still yesterday there */
+const HOME_DAY_START = 300;
+const nextDayKey = (key) => { const [y, m, d] = key.split('-').map(Number); return dateKey(new Date(y, m - 1, d + 1)); };
+const logicalNow = () => (isHome() ? new Date(Date.now() - HOME_DAY_START * 60000) : new Date());
+/** "today" on this computer: the calendar day at the office, the 05:00 → 05:00 day at home */
+const logicalToday = () => dateKey(logicalNow());
+/** minutes into the day, in the same frame as dayView(key).line */
+const minuteIn = (dv) => { const n = new Date(); const m = n.getHours() * 60 + n.getMinutes(); return dv.shift ? (m - dv.shift + 1440) % 1440 : m; };
+
 /** today's workday on all computers (office / home aware) */
 function todayWorkday() {
-  const key = dateKey();
-  const now = new Date();
-  return workdayPlaces(dayView(key), cfg.get('breakMinutes'), {
-    ws: hm(cfg.get('workStart')), we: hm(cfg.get('workEnd')), fix: getFix(key), nowMin: now.getHours() * 60 + now.getMinutes(),
+  const key = logicalToday();
+  const dv = dayView(key);
+  return workdayPlaces(dv, cfg.get('breakMinutes'), {
+    ws: hm(cfg.get('workStart')), we: hm(cfg.get('workEnd')), fix: getFix(key), nowMin: minuteIn(dv), shift: dv.shift,
   });
 }
 
@@ -1632,13 +1657,12 @@ function activitySummary({ weekOffset = 0 } = {}) {
   const we = hm(cfg.get('workEnd'));
   const target = dayTarget();
   const workDays = cfg.get('workDays') || [];
-  const now = new Date();
+  const now = logicalNow(); // at home the day runs 05:00 → 05:00
   const todayKey = dateKey(now);
-  const nowMin = now.getHours() * 60 + now.getMinutes();
   const dayInfo = (k) => {
     const dv = k <= todayKey ? dayView(k) : { line: '.'.repeat(1440), water: 0 };
     const fix = getFix(k);
-    const wd = workdayPlaces(dv, breakMin, { ws, we, fix, nowMin: k === todayKey ? nowMin : null });
+    const wd = workdayPlaces(dv, breakMin, { ws, we, fix, nowMin: k === todayKey ? minuteIn(dv) : null, shift: dv.shift || 0 });
     if (wd.off) wd.total = target; // vacation / sick count as a full day (the daily goal at home)
     return { dv, fix, wd };
   };
@@ -1686,6 +1710,7 @@ function activitySummary({ weekOffset = 0 } = {}) {
       stats: stats(t.dv.line, breakMin),
       workday: t.wd,
       focus: focusStreak(t.dv.line, breakMin),
+      shift: t.dv.shift || 0, // the line (and stats / focus) start at this clock minute
       fix: t.fix,
     },
     week,
@@ -1704,11 +1729,10 @@ function dayForEdit({ date }) {
   const breakMin = cfg.get('breakMinutes');
   const ws = hm(cfg.get('workStart'));
   const we = hm(cfg.get('workEnd'));
-  const isToday = date === dateKey();
-  const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
-  const dv = date <= dateKey() ? dayView(date) : { line: '.'.repeat(1440) };
-  const measured = workdayPlaces(dv, breakMin, { ws, we, nowMin: isToday ? nowMin : null });
-  return { day: { date, measured, fix: getFix(date), future: date > dateKey() } };
+  const isToday = date === logicalToday();
+  const dv = date <= logicalToday() ? dayView(date) : { line: '.'.repeat(1440) };
+  const measured = workdayPlaces(dv, breakMin, { ws, we, nowMin: isToday ? minuteIn(dv) : null, shift: dv.shift || 0 });
+  return { day: { date, measured, fix: getFix(date), future: date > logicalToday() } };
 }
 
 function remindersTick() {
@@ -1716,8 +1740,9 @@ function remindersTick() {
   carryChecks();
   dateReminders();
   const now = new Date();
-  if (!(cfg.get('workDays') || []).includes(now.getDay())) return;
-  const key = dateKey(now);
+  const day = logicalNow(); // at home, 01:00 still belongs to yesterday's day
+  if (!(cfg.get('workDays') || []).includes(day.getDay())) return;
+  const key = dateKey(day);
   const todayFix = getFix(key);
   if (todayFix && (todayFix.type === 'vac' || todayFix.type === 'sick')) return; // day off: no reminders
   const m = now.getHours() * 60 + now.getMinutes();

@@ -149,3 +149,13 @@ test('home: a night of work and an evening, with the computer off all day in bet
   assert.strictEqual(d.breakMinutes, 0);
   assert.strictEqual(d.sessions, 3);
 });
+
+test('home day from 05:00: a shifted line reports clock times', () => {
+  // shifted line: index 0 = 05:00. Work 19:00–21:00 (index 840–960) and 00:00–01:21 after midnight (index 1140–1221)
+  const home = lineOf([[840, 960, 'w'], [1140, 1221, 'w']]);
+  const d = workdayPlaces({ office: null, home }, 10, { ws: H(9), we: H(17), shift: 300 });
+  assert.strictEqual(d.total, 120 + 81);
+  assert.strictEqual(d.arrival, H(19));
+  assert.strictEqual(d.leave, H(1, 21));
+  assert.strictEqual(d.sessions, 2);
+});

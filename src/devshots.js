@@ -39,6 +39,10 @@ module.exports = async function devShots(ctx) {
     const nowMin = now.getHours() * 60 + now.getMinutes();
     // like a real home day: after midnight, the computer off all day, then work again in the last hour
     act.day(key(now)).line = line([[H(0), H(1, 21), 'w'], [H(1, 21), H(3), 'b'], [Math.max(H(3), nowMin - 70), Math.max(H(3), nowMin - 40), 'w'], [Math.max(H(3), nowMin - 25), nowMin, 'w']]);
+    // yesterday on this (home) computer: an evening of work that went on past midnight into today 00:00–01:21
+    const y = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    act.day(key(y)).line = line([[H(19), H(21), 'w'], [H(22), H(23, 59) + 1, 'w']]);
+    act.day(key(y)).place = 'home';
     act.dirty = true;
 
     ctx.setExpanded(true, { explicit: true }, 'sidebar');
@@ -63,6 +67,7 @@ module.exports = async function devShots(ctx) {
     log(`after click, switch: ${await text(sb, '.pchip')} · config: ${ctx.cfg().get('workPlace')}`);
     log(`home tiles: ${await text(sb, '.stats')}`);
     log(`home banner: ${await text(sb, '#workday')}`);
+    { const sm = ctx.activitySummary(); log(`home today: ${sm.today.date} total ${sm.today.workday.total} shift ${sm.today.shift} · yesterday ${sm.week.find((d) => d.date === key(y))?.total}`); }
     log(`today place on disk: ${act.day(key(now)).place}`);
     await snap(sb, '02-home');
 

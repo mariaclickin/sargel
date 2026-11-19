@@ -601,11 +601,22 @@ async function renderDay() {
   const c = S.config;
   const goal = c.waterGoal || 8;
   const { ws, we, target } = s;
-  const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
-  const arr = wd.arrival != null ? wd.arrival : t.arrival;
-  const lv = wd.leave != null ? wd.leave : t.leave;
-  const from = Math.max(0, Math.min(ws - 60, arr != null ? Math.floor(arr / 60) * 60 : ws - 60));
-  const to = Math.min(1440, Math.max(we + 60, lv != null ? Math.ceil(lv / 60) * 60 : we + 60));
+  // a home day runs 05:00 → 05:00: its line starts at minute `sh` of the clock (0 at the office)
+  const sh = s.today.shift || 0;
+  const ck = (i) => clock((i + sh) % 1440);
+  const nowMin = (new Date().getHours() * 60 + new Date().getMinutes() - sh + 1440) % 1440;
+  let from;
+  let to;
+  if (sh) {
+    // no work hours at home: show from the first activity to the last (or now)
+    from = t.arrival != null ? Math.max(0, Math.floor(t.arrival / 60) * 60 - 60) : Math.max(0, Math.floor(nowMin / 60) * 60 - 180);
+    to = Math.min(1440, Math.max(t.leave != null ? Math.ceil(t.leave / 60) * 60 + 60 : 0, Math.ceil((nowMin + 1) / 60) * 60, from + 360));
+  } else {
+    const arr = wd.arrival != null ? wd.arrival : t.arrival;
+    const lv = wd.leave != null ? wd.leave : t.leave;
+    from = Math.max(0, Math.min(ws - 60, arr != null ? Math.floor(arr / 60) * 60 : ws - 60));
+    to = Math.min(1440, Math.max(we + 60, lv != null ? Math.ceil(lv / 60) * 60 : we + 60));
+  }
 
   // timeline: work before the start time is shown lighter ("early")
   const line = s.today.line;
@@ -674,13 +685,13 @@ async function renderDay() {
       </div>
       ${wd.place === 'home' ? `<p class="muted small day-note">${icon('home')} מצב בית: נספר רק זמן הפעילות, בלי שעות התחלה וסוף</p>` : ''}
       ${wd.place === 'mixed' && wd.homeMinutes ? `<p class="muted small day-note">${icon('home')} <b class="acc">+${fmtMin(wd.homeMinutes)}</b> מהבית, מחוץ לשעות המשרד</p>` : ''}
-      ${fo.len ? `<p class="muted small day-note">${icon('bolt')} הרצף הארוך: ${clock(fo.start)}–${clock(fo.end)} בלי הפסקה של ${s.breakMin}+ דק׳</p>` : ''}
+      ${fo.len ? `<p class="muted small day-note">${icon('bolt')} הרצף הארוך: <span dir="ltr">${ck(fo.start)}–${ck(fo.end)}</span> בלי הפסקה של ${s.breakMin}+ דק׳</p>` : ''}
       ${wd.early ? `<p class="muted small day-note">${icon('sun')} הגעת ב-${clock(wd.arrival)} · <b class="acc">+${fmtMin(wd.early)} לפני ${clock(ws)}</b> נספר כשעות נוספות</p>` : ''}
       ${wd.late ? `<p class="muted small day-note">${icon('clock')} <b class="acc">+${fmtMin(wd.late)} אחרי ${clock(we)}</b> נספר כשעות נוספות</p>` : ''}`}
     <div class="sec-t">ציר היום</div>
-    <div class="tl">${runs.map(([a, b, ch]) => `<div class="tl-${ch === 'w' ? 'w' : ch === 'e' ? 'e' : ch === 'b' ? 'b' : ch === 'o' ? 'o' : 'n'}" style="width:${((b - a) / span) * 100}%" title="${clock(a)}–${clock(b)}"></div>`).join('')}
+    <div class="tl">${runs.map(([a, b, ch]) => `<div class="tl-${ch === 'w' ? 'w' : ch === 'e' ? 'e' : ch === 'b' ? 'b' : ch === 'o' ? 'o' : 'n'}" style="width:${((b - a) / span) * 100}%" title="${ck(a)}–${ck(b)}"></div>`).join('')}
       ${nowMin >= from && nowMin <= to ? `<div class="tl-now" style="left:${((nowMin - from) / span) * 100}%"></div>` : ''}</div>
-    <div class="tl-axis">${ticks.map((m) => `<span style="left:${((m - from) / span) * 100}%">${clock(m)}</span>`).join('')}</div>
+    <div class="tl-axis">${ticks.map((m) => `<span style="left:${((m - from) / span) * 100}%">${ck(m)}</span>`).join('')}</div>
     <div class="tl-legend">${wd.place === 'home'
       ? '<span><i class="lg-w"></i>עבודה</span><span><i class="lg-n"></i>בלי פעילות</span><span><i class="lg-o"></i>מעקב כבוי</span>'
       : `<span><i class="lg-w"></i>עבודה</span><span><i class="lg-e"></i>לפני ${clock(ws)}</span><span><i class="lg-b"></i>הפסקה (${s.breakMin}+ דק׳)</span><span><i class="lg-o"></i>לא נמדד</span>`}</div>
