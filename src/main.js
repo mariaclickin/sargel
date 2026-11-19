@@ -1654,7 +1654,7 @@ function activitySummary({ weekOffset = 0 } = {}) {
       const k = dateKey(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
       const { dv, fix, wd } = k === todayKey ? t : dayInfo(k);
       if (k <= todayKey) total += wd.total;
-      days.push({ date: k, dow: i, future: k > todayKey, workday: workDays.includes(i), total: wd.total, overtime: wd.overtime, breaks: wd.breakMinutes || 0, off: wd.off, fixed: !!fix && !wd.off, water: dv.water });
+      days.push({ date: k, dow: i, future: k > todayKey, workday: workDays.includes(i), total: wd.total, overtime: wd.overtime, breaks: wd.breakMinutes || 0, off: wd.off, place: wd.place, fixed: !!fix && !wd.off, water: dv.water });
     }
     return { days, total };
   };
@@ -1664,7 +1664,10 @@ function activitySummary({ weekOffset = 0 } = {}) {
   // per-day averages: only days that were worked and are over (no vacation / sick / empty days, not today)
   const counted = week.filter((d) => !d.off && d.total > 0 && d.date < todayKey);
   const avg = (f) => (counted.length ? Math.round(counted.reduce((a, d) => a + f(d), 0) / counted.length) : null);
-  const weekAvg = { days: counted.length, work: avg((d) => d.total), breaks: avg((d) => d.breaks) };
+  // breaks only mean something at the office — home days have no breaks, just time off the computer
+  const atOffice = counted.filter((d) => d.place !== 'home');
+  const breaksAvg = atOffice.length ? Math.round(atOffice.reduce((a, d) => a + d.breaks, 0) / atOffice.length) : null;
+  const weekAvg = { days: counted.length, work: avg((d) => d.total), breaks: breaksAvg };
   // overtime this month (days up to today)
   let monthOver = 0;
   const m0 = new Date(now.getFullYear(), now.getMonth(), 1);

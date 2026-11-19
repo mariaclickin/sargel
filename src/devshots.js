@@ -37,7 +37,8 @@ module.exports = async function devShots(ctx) {
     const act = ctx.activity();
     const now = new Date();
     const nowMin = now.getHours() * 60 + now.getMinutes();
-    act.day(key(now)).line = line([[H(8, 30), H(10, 30), 'w'], [H(10, 30), H(13, 30), 'b'], [H(13, 30), Math.max(H(13, 31), nowMin), 'w']]);
+    // like a real home day: after midnight, the computer off all day, then work again in the last hour
+    act.day(key(now)).line = line([[H(0), H(1, 21), 'w'], [H(1, 21), H(3), 'b'], [Math.max(H(3), nowMin - 70), Math.max(H(3), nowMin - 40), 'w'], [Math.max(H(3), nowMin - 25), nowMin, 'w']]);
     act.dirty = true;
 
     ctx.setExpanded(true, { explicit: true }, 'sidebar');

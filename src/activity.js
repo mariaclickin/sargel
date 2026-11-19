@@ -214,6 +214,18 @@ function workday(line, breakMin, { ws, we, fix = null, nowMin = null } = {}) {
   };
 }
 
+/** how many separate stretches of work: a quiet gap of breakMin+ minutes starts a new one */
+function sessions(line, breakMin) {
+  let n = 0;
+  let lastW = -1;
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] !== 'w') continue;
+    if (lastW < 0 || i - lastW - 1 >= breakMin) n++;
+    lastW = i;
+  }
+  return n;
+}
+
 /**
  * The workday when the minutes come from computers set to office and/or home.
  * office: from arrival to leaving, breaks included (workday above).
@@ -232,10 +244,10 @@ function workdayPlaces({ office, home }, breakMin, opts = {}) {
     return { ...workday(manual ? merged : line, breakMin, opts), place: 'office', homeMinutes: 0 };
   }
   if (!worked(office)) {
+    // at home a long quiet stretch is not a break — the computer just wasn't being worked on
     const st = stats(home, breakMin);
     let leave = st.leave;
     if (nowMin != null && leave != null && leave > nowMin) leave = nowMin;
-    const fixedBreaks = fix && typeof fix.breaks === 'number';
     return {
       total: st.active,
       arrival: st.arrival,
@@ -245,8 +257,9 @@ function workdayPlaces({ office, home }, breakMin, opts = {}) {
       overtime: 0,
       off: null,
       fixed: !!fix,
-      breakMinutes: fixedBreaks ? fix.breaks : st.breakMinutes,
-      breaks: fixedBreaks ? null : st.breaks,
+      breakMinutes: 0,
+      breaks: null,
+      sessions: sessions(home, breakMin),
       place: 'home',
       homeMinutes: st.active,
     };
@@ -260,4 +273,4 @@ function workdayPlaces({ office, home }, breakMin, opts = {}) {
   return { ...wd, total: wd.total + extra, place: 'mixed', homeMinutes: extra };
 }
 
-module.exports = { Activity, combine, stats, focusStreak, workday, workdayPlaces, dateKey, DAY };
+module.exports = { Activity, combine, stats, focusStreak, sessions, workday, workdayPlaces, dateKey, DAY };

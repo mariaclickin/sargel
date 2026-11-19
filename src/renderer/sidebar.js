@@ -611,7 +611,8 @@ async function renderDay() {
   const line = s.today.line;
   const chAt = (i) => {
     let ch = line[i];
-    if (ch === '.' && t.arrival != null && i > t.arrival && i < t.leave) ch = 'b';
+    // at home a quiet stretch is just "not working" (empty), never a break
+    if (wd.place === 'home') { if (ch === 'b') ch = '.'; } else if (ch === '.' && t.arrival != null && i > t.arrival && i < t.leave) ch = 'b';
     if (ch === 'w' && i < ws && wd.place !== 'home') ch = 'e'; // at home there is no start time
     return ch;
   };
@@ -665,7 +666,9 @@ async function renderDay() {
         <button class="ghost sm" data-action="day-edit" data-date="${s.today.date}">שינוי</button></div>` : `
       <div class="stats ${wd.place === 'home' ? 'stats3' : 'stats4'}">
         <div class="stat"><b>${fmtMin(wd.total)}</b><span>${wd.place === 'home' ? 'זמן עבודה<br>בפועל' : 'זמן עבודה<br>כולל הפסקות'}</span></div>
-        <div class="stat"><b>${fmtMin(wd.breakMinutes || 0)}</b><span>הפסקות${wd.breaks != null ? `<br>(${wd.breaks})` : ''}</span></div>
+        ${wd.place === 'home'
+          ? `<div class="stat"><b>${wd.sessions || 0}</b><span>פרקי<br>עבודה</span></div>`
+          : `<div class="stat"><b>${fmtMin(wd.breakMinutes || 0)}</b><span>הפסקות${wd.breaks != null ? `<br>(${wd.breaks})` : ''}</span></div>`}
         ${wd.place === 'home' ? '' : `<div class="stat"><b class="acc">${wd.overtime ? `+${fmtMin(wd.overtime)}` : '0:00'}</b><span>שעות<br>נוספות</span></div>`}
         <div class="stat hl"><b class="acc">${fmtMin(fo.len || 0)}</b><span>רצף ריכוז<br>הכי ארוך</span></div>
       </div>
@@ -678,9 +681,13 @@ async function renderDay() {
     <div class="tl">${runs.map(([a, b, ch]) => `<div class="tl-${ch === 'w' ? 'w' : ch === 'e' ? 'e' : ch === 'b' ? 'b' : ch === 'o' ? 'o' : 'n'}" style="width:${((b - a) / span) * 100}%" title="${clock(a)}–${clock(b)}"></div>`).join('')}
       ${nowMin >= from && nowMin <= to ? `<div class="tl-now" style="left:${((nowMin - from) / span) * 100}%"></div>` : ''}</div>
     <div class="tl-axis">${ticks.map((m) => `<span style="left:${((m - from) / span) * 100}%">${clock(m)}</span>`).join('')}</div>
-    <div class="tl-legend"><span><i class="lg-w"></i>עבודה</span>${wd.place === 'home' ? '' : `<span><i class="lg-e"></i>לפני ${clock(ws)}</span>`}<span><i class="lg-b"></i>הפסקה (${s.breakMin}+ דק׳)</span><span><i class="lg-o"></i>לא נמדד</span></div>
+    <div class="tl-legend">${wd.place === 'home'
+      ? '<span><i class="lg-w"></i>עבודה</span><span><i class="lg-n"></i>בלי פעילות</span><span><i class="lg-o"></i>מעקב כבוי</span>'
+      : `<span><i class="lg-w"></i>עבודה</span><span><i class="lg-e"></i>לפני ${clock(ws)}</span><span><i class="lg-b"></i>הפסקה (${s.breakMin}+ דק׳)</span><span><i class="lg-o"></i>לא נמדד</span>`}</div>
     <div class="kv"><span>${wd.place === 'home' ? 'התחלה ראשונה' : 'הגעה'}${wd.fixed && !wd.off ? ' <small class="acc">(תוקן ידנית)</small>' : ''}</span><b dir="ltr">${wd.arrival != null ? clock(wd.arrival) : '—'} <button class="icon-btn sm kv-edit" data-action="day-edit" data-date="${s.today.date}" title="תיקון היום">${icon('edit')}</button></b></div>
-    <div class="kv"><span>הפסקה הכי ארוכה</span><b>${t.longest ? `${t.longest} דק׳ (${clock(t.longestAt)})` : '—'}</b></div>
+    ${wd.place === 'home'
+      ? `<div class="kv"><span>סיום אחרון</span><b dir="ltr">${wd.leave != null ? clock(wd.leave) : '—'}</b></div>`
+      : `<div class="kv"><span>הפסקה הכי ארוכה</span><b>${t.longest ? `${t.longest} דק׳ (${clock(t.longestAt)})` : '—'}</b></div>`}
     <div class="kv"><span>השבוע עד עכשיו</span><b>${fmtMin(s.weekTotal)} / ${fmtMin(s.weekTarget)}</b></div>
     <div class="kv"><span>שעות נוספות החודש</span><b class="acc">${s.monthOver ? `+${fmtMin(s.monthOver)}` : '0:00'}</b></div>
     <div class="sec-t">${icon('droplet')} מים היום <span class="muted">${s.today.water} / ${goal} כוסות</span></div>
