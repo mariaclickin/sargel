@@ -1714,6 +1714,7 @@ function openSettings() {
       ${homePc ? '<p class="muted small" style="margin:-2px 0 6px">בלי שעות התחלה וסוף — נספר כל רגע של פעילות, מתי שעובדים.</p>' : ''}
       <div class="set-row"><span>ימים</span><div class="days">${DOW.map((d, i) => `<button class="day-b" data-d="${i}">${d}</button>`).join('')}</div></div>
       <label class="check"><input type="checkbox" class="s-hourly"><span>${homePc ? 'התראה על כל שעת עבודה שהושלמה <small>"עבדת 3 שעות מתוך 8"</small>' : 'התראה בכל שעה עגולה <small>"שעה 3 מתוך 8 הושלמה"</small>'}</span></label>
+      <label class="check"><input type="checkbox" class="s-confetti"><span>קונפטי בסוף היום 🎉 <small>${homePc ? 'כשמשלימים את יעד השעות' : 'בסוף שעות העבודה'} · פעם אחת ביום</small></span></label>
       <label class="check"><input type="checkbox" class="s-water"><span>תזכורת לשתות מים</span></label>
       <div class="set-row"><span>כל כמה זמן</span><select class="s-wm">${homePc
         ? '<option value="45">45 דקות של עבודה</option><option value="60">שעה של עבודה</option><option value="90">שעה וחצי של עבודה</option><option value="120">שעתיים של עבודה</option>'
@@ -1837,6 +1838,10 @@ function openSettings() {
     const bindCheck = (sel, key) => { const el = $(sel, m); el.checked = !!c[key]; el.onchange = () => set({ [key]: el.checked }); };
     bindCheck('.s-hourly', 'hourlyNotify');
     bindCheck('.s-water', 'waterReminder');
+    const cf = $('.s-confetti', m);
+    cf.checked = c.confetti !== false;
+    // turning it on shows it once, so you see what you get
+    cf.onchange = async () => { await set({ confetti: cf.checked }); if (cf.checked) api.call('confetti:show'); };
     bindCheck('.s-track', 'trackEnabled');
     for (const [sel, key] of [['.s-avgw', 'avgWork'], ['.s-avgb', 'avgBreaks']]) {
       const el = $(sel, m);

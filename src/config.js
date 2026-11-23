@@ -23,6 +23,7 @@ const DEFAULTS = {
   avgWork: true, // "My day": average work per day under the week chart
   avgBreaks: true, // ... and average breaks per day
   hourlyNotify: true,
+  confetti: true, // confetti over the screen when the workday is done
   waterReminder: true,
   waterMinutes: 60,
   waterGoal: 8,
