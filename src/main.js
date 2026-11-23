@@ -344,6 +344,32 @@ function createToast() {
   toastWin.webContents.on('will-navigate', (e) => e.preventDefault());
 }
 
+/**
+ * End-of-day confetti: a see-through, click-through window over the whole screen for a few seconds.
+ * Made on demand and destroyed afterwards — nothing stays running.
+ */
+let confettiWin = null;
+function celebrate() {
+  if (confettiWin && !confettiWin.isDestroyed()) return;
+  const win = new BrowserWindow({
+    ...screen.getPrimaryDisplay().bounds,
+    frame: false, transparent: true, resizable: false, movable: false, minimizable: false, maximizable: false,
+    fullscreenable: false, focusable: false, skipTaskbar: true, alwaysOnTop: true, hasShadow: false, show: false,
+    backgroundColor: '#00000000',
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+  });
+  confettiWin = win;
+  win.setIgnoreMouseEvents(true);
+  win.setAlwaysOnTop(true, 'screen-saver');
+  if (isMac) win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.once('ready-to-show', () => win.showInactive());
+  win.loadFile(path.join(RENDERER, 'confetti.html'));
+  // ~2 s of firing + time for the last pieces to fall
+  setTimeout(() => { if (!win.isDestroyed()) win.destroy(); if (confettiWin === win) confettiWin = null; }, 5500);
+}
+
 function showToast(payload) {
   if (!toastWin) return;
   const wa = screen.getPrimaryDisplay().workArea;
@@ -531,7 +557,7 @@ function applyConfig(patch) {
   if (hm.test(patch.workStart || '')) clean.workStart = patch.workStart;
   if (hm.test(patch.workEnd || '')) clean.workEnd = patch.workEnd;
   if (Array.isArray(patch.workDays)) clean.workDays = [...new Set(patch.workDays.map(Number).filter((d) => d >= 0 && d <= 6))].sort();
-  for (const k of ['trackEnabled', 'hourlyNotify', 'waterReminder', 'trackerEnabled', 'journalEnabled', 'avgWork', 'avgBreaks']) if (k in patch) clean[k] = !!patch[k];
+  for (const k of ['trackEnabled', 'hourlyNotify', 'waterReminder', 'trackerEnabled', 'journalEnabled', 'avgWork', 'avgBreaks', 'confetti']) if (k in patch) clean[k] = !!patch[k];
   if ('breakMinutes' in patch) clean.breakMinutes = Math.round(clamp(patch.breakMinutes, 3, 60));
   if ('waterMinutes' in patch) clean.waterMinutes = Math.round(clamp(patch.waterMinutes, 15, 240));
   if ('waterGoal' in patch) clean.waterGoal = Math.round(clamp(patch.waterGoal, 1, 20));
@@ -1753,15 +1779,18 @@ function remindersTick() {
   const water = !!cfg.get('waterReminder');
   const wm = cfg.get('waterMinutes');
   const waterWithHour = hourly && water && wm === 60;
+  const celebrateOn = cfg.get('confetti') !== false;
 
   const home = isHome();
   const events = [];
   if (home) {
     // home: no work hours — toasts follow the time actually worked (a 3-hour break brings none)
-    const worked = (hourly || water) ? todayWorkday().total : 0;
+    const worked = (hourly || water || celebrateOn) ? todayWorkday().total : 0;
     if (hourly) {
       const done = Math.min(total, Math.floor(worked / 60));
       for (let h = 1; h <= done; h++) events.push({ id: `a${h}`, t: m, h, kind: h >= total ? 'end' : 'hour' });
+    } else if (celebrateOn && worked >= total * 60) {
+      events.push({ id: `a${total}`, t: m, h: total, kind: 'end' }); // the end of the day still comes, with its confetti
     }
     if (water && !waterWithHour) {
       const cups = Math.min(30, Math.floor(worked / Math.max(15, wm)));
@@ -1769,6 +1798,7 @@ function remindersTick() {
     }
   } else {
     if (hourly) for (let t = ws + 60; t <= we; t += 60) events.push({ id: `h${t}`, t, h: Math.round((t - ws) / 60), kind: t >= we ? 'end' : 'hour' });
+    else if (celebrateOn) events.push({ id: `h${we}`, t: we, h: total, kind: 'end' }); // the end of the day still comes, with its confetti
     if (water && !waterWithHour) for (let t = ws + wm; t < we; t += wm) events.push({ id: `w${t}`, t, kind: 'water' });
   }
   // due = time passed (shown up to 45 min late, e.g. after a break) and not shown yet
@@ -1799,6 +1829,8 @@ function remindersTick() {
     payload = { kind: 'water', title: 'זמן לכוס מים 💧', body: `${dv.water}/${goal} כוסות היום`, water: true };
   }
   showToast(payload);
+  // the day is done (end of work hours, or the daily goal at home) — once a day, like the toast itself
+  if (e.kind === 'end' && cfg.get('confetti') !== false) celebrate();
 }
 
 function deleteItem({ vault, id }) {
@@ -2079,6 +2111,7 @@ function registerIpc() {
     broadcast();
   });
   handle('toast:close', () => { if (toastWin) toastWin.hide(); });
+  handle('confetti:show', () => celebrate());
   handle('toast:test', ({ kind }) => {
     if (kind === 'water') showToast({ kind: 'water', title: 'זמן לכוס מים 💧', body: 'כך תיראה התזכורת', water: true });
     else {
@@ -2186,7 +2219,7 @@ async function boot() {
     require('./devshots')({
       app, state, tstate, jstate, tracker: () => tracker, journal: () => journalWin, vaults, setExpanded, trk: { startBlock, toggleSub, addSub, blockToggleWithToast, saveLauncher, runLauncher }, createVault, openVault, unlockPersonal, lockAll, showSearch, showKeys, broadcast,
       sidebar: () => sidebar, search: () => searchWin, keys: () => keysWin,
-      quick: () => quickWin, toastWin: () => toastWin, showQuick, showToast, activity: () => activity, activitySummary, cfg: () => cfg,
+      quick: () => quickWin, toastWin: () => toastWin, showQuick, showToast, activity: () => activity, activitySummary, cfg: () => cfg, celebrate, confettiWin: () => confettiWin,
     });
   }
 }
